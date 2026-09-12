@@ -1469,7 +1469,7 @@ async function testBahraBackend() {
       
       <div class="login-help"><div class="hic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2M4 14h3v5H5a1 1 0 0 1-1-1zM20 14h-3v5h2a1 1 0 0 0 1-1z"/></svg></div>
         <span data-i="loginHelp">في حال وجود أي مشكلة في تسجيل الدخول، يرجى التواصل مع قسم الموارد البشرية.</span></div>
-      <div class="hint-users" data-i="hintUsers">للتجربة — مدير: <code>1001</code> / مدرب: <code>2001</code> / موظف: <code>3001</code> — رمز PIN للجميع: <code>1234</code></div>
+      <div class="hint-users" data-i="hintUsers">استخدم رقمك الوظيفي المسجل في قاعدة بيانات الموظفين — رمز PIN الحالي: <code>1234</code></div>
     </div>
   </div>
 </div>
@@ -1592,13 +1592,23 @@ async function syncBackendData(){
   const empNo=String(CURRENT.empNo||CURRENT.id);
   try{
     BACKEND_DATA=await backendRead("portalData",{empNo},15000);
+    const signed=applyPortalEmployee(BACKEND_DATA);
+    if(signed){
+      // Remove the old demo directory immediately. Google Sheets becomes the source of truth.
+      replaceEmployeeDirectory([BACKEND_DATA.employee]);
+      updateProfile();
+      buildNav();
+    }
     try{ updateNotificationBadge(); }catch(_){}
 
-    // Preload the AI dashboard quietly so opening it feels immediate.
     if(CURRENT.role==="admin" || CURRENT.role==="manager"){
-      backendRead("dashboard",{empNo},15000)
-        .then(d=>{BACKEND_DASHBOARD=d; if(ROUTE==="aiDash"&&document.getElementById("aiDashBody")) renderAIDashboardData(d,BACKEND_DATA);})
-        .catch(()=>{});
+      try{
+        const d=await backendRead("dashboard",{empNo},15000);
+        BACKEND_DASHBOARD=d;
+        if(Array.isArray(d?.employees)) replaceEmployeeDirectory(d.employees);
+        if(ROUTE==="emps" || ROUTE==="trainers" || ROUTE==="needs" || ROUTE==="reports") render();
+        if(ROUTE==="aiDash"&&document.getElementById("aiDashBody")) renderAIDashboardData(d,BACKEND_DATA);
+      }catch(e){ console.warn("Employee directory sync:",e); }
     }
 
     if(ROUTE==="aiDash" && document.getElementById("aiDashBody")) setTimeout(()=>loadAIDashboard(),0);
@@ -1827,6 +1837,65 @@ function buildEmployees(){
 buildEmployees();
 const empById = id => EMPLOYEES.find(e=>String(e.id)===String(id));
 
+/* ---------- LIVE EMPLOYEE DIRECTORY (Google Sheets is the source of truth) ---------- */
+function uiEmployeeFromSheet(row){
+  const no=String(row?.EmployeeNo ?? row?.empNo ?? row?.id ?? "").trim();
+  const numericId=/^\d+$/.test(no) ? Number(no) : no;
+  const role=String(row?.Role || "employee").trim().toLowerCase() || "employee";
+  const dept=String(row?.Department || "").trim();
+  const deptEn=String(row?.DepartmentEN || dept).trim();
+  const position=String(row?.JobTitle || "").trim();
+  const positionEn=String(row?.JobTitleEN || position).trim();
+  const perfRaw=Number(row?.PerformanceScore ?? row?.OverallScore ?? row?.Performance ?? NaN);
+  const perf=Number.isFinite(perfRaw) ? Math.round(perfRaw) : null;
+  const name=String(row?.NameAR || row?.Name || no).trim();
+  const nameEn=String(row?.NameEN || name).trim();
+  const hire=row?.HireDate ? String(row.HireDate).slice(0,10) : "";
+  const hasNeedInfo = row?.OpenNeeds !== undefined || row?.HighNeeds !== undefined;
+  const openNeeds = hasNeedInfo ? Number(row?.OpenNeeds || 0) : null;
+  const highNeeds = hasNeedInfo ? Number(row?.HighNeeds || 0) : null;
+  const needKey = !hasNeedInfo ? "unknown" : (highNeeds>0 ? "high" : (openNeeds>0 ? "mid" : "ok"));
+  const needStatus = !hasNeedInfo ? "—" : (highNeeds>0 ? (LANG==="ar"?"عاجل":"Urgent") : (openNeeds>0 ? (LANG==="ar"?"متوسط":"Medium") : (LANG==="ar"?"مكتمل":"Complete")));
+  return {
+    id:numericId, empNo:no, name, nameEn, role, dept, deptEn,
+    posKey:"sheet", position, positionEn, pin:"1234", hireDate:hire,
+    email:String(row?.Email || ""), managerNo:String(row?.ManagerNo || ""),
+    grade:String(row?.Grade || ""), status:String(row?.Status || "Active"),
+    perf, skills:{}, required:[], completed:[], inprog:[], tests:{}, hours:0,
+    certs:[], progress:0, avatar:(name||no).trim().charAt(0),
+    needs:{list:[],index:openNeeds??0,statusK:needKey,status:needStatus},
+    _sheet:true
+  };
+}
+function replaceEmployeeDirectory(rows){
+  const mapped=(Array.isArray(rows)?rows:[]).map(uiEmployeeFromSheet).filter(e=>e.empNo);
+  // Keep the signed-in user even when a manager-scoped directory does not return the requester.
+  if(CURRENT && !mapped.some(e=>String(e.empNo)===String(CURRENT.empNo||CURRENT.id))) mapped.unshift(CURRENT);
+  EMPLOYEES.splice(0,EMPLOYEES.length,...mapped);
+  if(CURRENT){
+    const fresh=EMPLOYEES.find(e=>String(e.empNo)===String(CURRENT.empNo||CURRENT.id));
+    if(fresh) CURRENT=fresh;
+  }
+  return EMPLOYEES;
+}
+function applyPortalEmployee(portal){
+  if(!portal?.employee) return null;
+  const fresh=uiEmployeeFromSheet(portal.employee);
+  // Use actual performance for the signed-in employee when available.
+  const ps=Number(portal?.performance?.OverallScore ?? portal?.performance?.Score ?? NaN);
+  if(Number.isFinite(ps)) fresh.perf=Math.round(ps);
+  fresh.certs=Array.isArray(portal.certificates)?portal.certificates:[];
+  fresh.hours=0;
+  fresh.needs={
+    list:Array.isArray(portal.trainingNeeds)?portal.trainingNeeds:[],
+    index:Array.isArray(portal.trainingNeeds)?portal.trainingNeeds.length:0,
+    statusK:(portal.trainingNeeds||[]).some(n=>String(n.Priority).toLowerCase()==="high")?"high":((portal.trainingNeeds||[]).length?"mid":"ok"),
+    status:(portal.trainingNeeds||[]).some(n=>String(n.Priority).toLowerCase()==="high")?(LANG==="ar"?"عاجل":"Urgent"):((portal.trainingNeeds||[]).length?(LANG==="ar"?"متوسط":"Medium"):(LANG==="ar"?"مكتمل":"Complete"))
+  };
+  CURRENT=fresh;
+  return fresh;
+}
+
 /* ---------- TRAINING NEEDS ENGINE ----------
    Priority order (set by HR Manager Abdullah):
    1) Mandatory job requirements   2) Performance evaluation
@@ -1958,7 +2027,7 @@ const I18N = {
   empNo:"الرقم الوظيفي",empNoPh:"أدخل الرقم الوظيفي",pinPh:"أدخل رمز PIN",
   remember:"تذكرني",forgot:"نسيت رمز PIN؟",loginBtn:"دخول إلى المنصة",
   loginHelp:"في حال وجود أي مشكلة في تسجيل الدخول، يرجى التواصل مع قسم الموارد البشرية.",
-  hintUsers:"للتجربة — مدير: <code>1001</code> / مدرب: <code>2001</code> / موظف: <code>3001</code> — رمز PIN للجميع: <code>1234</code>",
+  hintUsers:"استخدم رقمك الوظيفي المسجل في قاعدة بيانات الموظفين — رمز PIN الحالي: <code>1234</code>",
   searchPh:"ابحث عن دورة، مهارة، أو محتوى تدريبي...",sidePromo:'معاً... نصنع مستقبلاً <span class="r">أكثر إشراقاً</span>',logout:"تسجيل الخروج",
   aiTitle:"مساعد «اسألني»",aiSub:"مساعد التطوير الذكي",aiPh:"اكتب سؤالك...",
   aiNote:"مساعد الذكاء الاصطناعي متصل عبر Code.gs",
@@ -1995,7 +2064,7 @@ const I18N = {
   empNo:"Employee Number",empNoPh:"Enter employee number",pinPh:"Enter PIN",
   remember:"Remember me",forgot:"Forgot PIN?",loginBtn:"Sign in to platform",
   loginHelp:"If you have any issue signing in, please contact the HR department.",
-  hintUsers:"Demo — Admin: <code>1001</code> / Trainer: <code>2001</code> / Employee: <code>3001</code> — PIN for all: <code>1234</code>",
+  hintUsers:"Use your employee number registered in the employee database — current PIN: <code>1234</code>",
   searchPh:"Search for a course, skill, or training content...",sidePromo:'Together, a <span class="r">brighter</span> future',logout:"Sign out",
   aiTitle:"Ask-Me Assistant",aiSub:"Smart development assistant",aiPh:"Type your question...",
   aiNote:"AI assistant connected through Code.gs",
@@ -2234,32 +2303,52 @@ function removeProfilePhoto(){
 }
 
 /* ---------- AUTH ---------- */
-function doLogin(){
+async function doLogin(){
   const emp=document.getElementById("fEmp").value.trim();
   const pin=document.getElementById("fPin").value.trim();
   const err=document.getElementById("loginErr");
-  const u=empById(emp);
-  if(!u || u.pin!==pin){
+  err.classList.add("hidden");
+
+  if(!emp || pin!=="1234"){
     err.classList.remove("hidden");
-    err.textContent = LANG==="ar" ? "الرقم الوظيفي أو رمز PIN غير صحيح. جرّب 1001 / 1234." 
-                                   : "Wrong employee number or PIN. Try 1001 / 1234.";
+    err.textContent = LANG==="ar" ? "الرقم الوظيفي أو رمز PIN غير صحيح." : "Wrong employee number or PIN.";
     return;
   }
-  err.classList.add("hidden");
-  CURRENT=u;
+  if(!backendReady()){
+    err.classList.remove("hidden");
+    err.textContent = LANG==="ar" ? "تعذر الاتصال بقاعدة بيانات الموظفين." : "Unable to connect to the employee database.";
+    return;
+  }
+
+  const btn=document.querySelector('#login .btn-primary');
+  if(btn) btn.disabled=true;
   try{
-    localStorage.setItem("bahra_session_emp", String(u.id));
-    localStorage.setItem("bahra_session_route", "home");
-  }catch(_){}
-  document.getElementById("login").style.display="none";
-  document.getElementById("app").style.display="block";
-  document.body.classList.add("ai-authenticated");
-  
-  updateProfile();
-  ROUTE="home"; buildNav(); render();
-  updateNotificationBadge();
-  syncBackendData();
-  aiReset();
+    const portal=await backendRead("portalData",{empNo:emp},15000);
+    if(!portal?.ok || !portal?.employee) throw new Error("Employee not found");
+    BACKEND_DATA=portal;
+    const u=applyPortalEmployee(portal);
+    replaceEmployeeDirectory([portal.employee]);
+    if(!u) throw new Error("Employee not found");
+
+    try{
+      localStorage.setItem("bahra_session_emp", String(u.empNo||u.id));
+      localStorage.setItem("bahra_session_route", "home");
+    }catch(_){}
+    document.getElementById("login").style.display="none";
+    document.getElementById("app").style.display="block";
+    document.body.classList.add("ai-authenticated");
+    updateProfile();
+    ROUTE="home"; buildNav(); render();
+    updateNotificationBadge();
+    await syncBackendData();
+    aiReset();
+  }catch(e){
+    console.warn("Login:",e);
+    err.classList.remove("hidden");
+    err.textContent = LANG==="ar" ? "الرقم الوظيفي غير موجود في ملف Employees أو تعذر الاتصال بالبيانات." : "Employee number was not found in Employees or the database could not be reached.";
+  }finally{
+    if(btn) btn.disabled=false;
+  }
 }
 function logout(){
   if(!confirm(LANG==="ar"?"تسجيل الخروج من المنصة؟":"Sign out?")) return;
@@ -2795,7 +2884,7 @@ function certCard(e,ct){ const c=courseById(ct.course);
 function emptyState(m){ return `<div class="card" style="text-align:center;color:var(--muted);padding:40px">${m}</div>`; }
 
 /* ---------- TRAINING NEEDS (core) ---------- */
-function needTag(k){ const m={high:'t-red',mid:'t-warn',low:'t-blue',ok:'t-green'};
+function needTag(k){ if(k==='unknown') return '<span class="tag t-gray">—</span>'; const m={high:'t-red',mid:'t-warn',low:'t-blue',ok:'t-green'};
   return `<span class="tag ${m[k]}">${t('st_'+k)}</span>`; }
 const srcLabel = {mandatory:{ar:"متطلب إلزامي",en:"Mandatory"},performance:{ar:"تقييم الأداء",en:"Performance"},
   skill:{ar:"فجوة مهارة",en:"Skill gap"},test:{ar:"درجة اختبار",en:"Test score"}};
@@ -2829,7 +2918,7 @@ function viewNeeds(){
        <th>${LANG==='ar'?'الأداء':'Perf.'}</th><th style="width:170px">${LANG==='ar'?'مؤشر الاحتياج':'Need index'}</th>
        <th>${LANG==='ar'?'الحالة':'Status'}</th><th></th></tr></thead>
      <tbody>${ranked.slice(0,18).map(e=>{const col=e.needs.statusK==='high'?'var(--red)':e.needs.statusK==='mid'?'var(--warn)':e.needs.statusK==='low'?'var(--info)':'var(--ok)';return `
-       <tr onclick="empNeed(${e.id})" style="cursor:pointer">
+       <tr onclick="empNeed('${String(e.empNo||e.id).replace(/'/g,"\\'")}')" style="cursor:pointer">
          <td><b>${e.name}</b></td><td style="color:var(--muted)">${posName(e)}</td>
          <td><span class="tag ${e.perf<70?'t-red':'t-green'}">${e.perf}%</span></td>
          <td><div class="needbar"><div class="bt"><i style="width:${e.needs.index}%;background:${col}"></i></div><span style="font-size:12px;font-weight:800;color:${col}">${e.needs.index}</span></div></td>
@@ -2927,10 +3016,12 @@ function viewReports(){
    <div class="export-note">${actionIcon('shield')}<span>${LANG==='ar'?'أدوات التصدير والطباعة متاحة لحساب المدير فقط. ملف Excel يعمل دون مكتبات خارجية ويحتوي على البيانات الحالية بما فيها الدورات والشهادات المضافة من داخل المنصة.':'Export and print tools are restricted to the manager account. Excel generation works without external libraries and includes current in-platform additions.'}</span></div>`;
 }
 /* ---------- EMPLOYEES ---------- */
+function employeeDepartments(){ return [...new Set(EMPLOYEES.map(e=>e.dept).filter(Boolean))].sort((a,b)=>a.localeCompare(b,LANG==='ar'?'ar':'en')); }
 function viewEmps(){
-  return pageHead(LANG==='ar'?'الموظفون':'Employees', LANG==='ar'?`${EMPLOYEES.length} موظف عبر ${DEPTS.length} أقسام`:`${EMPLOYEES.length} employees`) +
+  const depts=employeeDepartments();
+  return pageHead(LANG==='ar'?'الموظفون':'Employees', LANG==='ar'?`${EMPLOYEES.length} موظف عبر ${depts.length} أقسام`:`${EMPLOYEES.length} employees across ${depts.length} departments`) +
    `<div class="filters"><select onchange="renderEmpTable(this.value)"><option value="">${LANG==='ar'?'كل الأقسام':'All depts'}</option>
-     ${DEPTS.map(d=>`<option value="${d}">${LANG==='ar'?d:DEPTS_EN[d]}</option>`).join("")}</select>
+     ${depts.map(d=>`<option value="${d}">${LANG==='ar'?d:(EMPLOYEES.find(e=>e.dept===d)?.deptEn||d)}</option>`).join("")}</select>
      <input placeholder="${LANG==='ar'?'بحث بالاسم أو الرقم...':'Search...'}" oninput="renderEmpTable('',this.value)"/></div>
      <div class="card" id="empWrap">${empTable(EMPLOYEES)}</div>`;
 }
@@ -2938,28 +3029,28 @@ function empTable(list){
   return `<table><thead><tr><th>${LANG==='ar'?'الرقم':'ID'}</th><th>${LANG==='ar'?'الاسم':'Name'}</th>
     <th>${LANG==='ar'?'المسمى':'Role'}</th><th>${LANG==='ar'?'القسم':'Dept'}</th><th>${LANG==='ar'?'الأداء':'Perf.'}</th>
     <th>${LANG==='ar'?'الاحتياج':'Need'}</th><th></th></tr></thead>
-    <tbody>${list.map(e=>`<tr onclick="empNeed(${e.id})" style="cursor:pointer">
-      <td><code style="color:var(--red-2)">${e.id}</code></td><td><b>${e.name}</b></td>
-      <td style="color:var(--muted)">${posName(e)}</td><td>${deptName(e)}</td>
-      <td><span class="tag ${e.perf<70?'t-red':'t-green'}">${e.perf}%</span></td>
-      <td>${needTag(e.needs.statusK)}</td><td style="color:var(--muted)">›</td></tr>`).join("")}</tbody></table>`;
+    <tbody>${list.map(e=>`<tr onclick="empNeed('${String(e.empNo||e.id).replace(/'/g,"\\'")}')" style="cursor:pointer">
+      <td><code style="color:var(--red-2)">${e.empNo||e.id}</code></td><td><b>${e.name}</b></td>
+      <td style="color:var(--muted)">${posName(e)||'—'}</td><td>${deptName(e)||'—'}</td>
+      <td>${Number.isFinite(e.perf)?`<span class="tag ${e.perf<70?'t-red':'t-green'}">${e.perf}%</span>`:'<span class="tag t-gray">—</span>'}</td>
+      <td>${needTag(e.needs?.statusK||'unknown')}</td><td style="color:var(--muted)">›</td></tr>`).join("")}</tbody></table>`;
 }
 function renderEmpTable(dept,q){ dept=dept||""; q=(q||"").trim();
   let list=EMPLOYEES;
   if(dept) list=list.filter(e=>e.dept===dept);
-  if(q) list=list.filter(e=>e.name.includes(q)||String(e.id).includes(q));
+  if(q) list=list.filter(e=>(e.name||'').includes(q)||(e.nameEn||'').toLowerCase().includes(q.toLowerCase())||String(e.empNo||e.id).includes(q));
   const w=document.getElementById("empWrap"); if(w)w.innerHTML=empTable(list);
 }
 
 /* ---------- TRAINERS / MANAGERS ---------- */
 function viewTrainers(){
-  const trs=EMPLOYEES.filter(e=>e.role==="trainer"||e.role==="admin");
+  const trs=EMPLOYEES.filter(e=>["trainer","admin","manager"].includes(e.role));
   return pageHead(LANG==='ar'?'المديرون والمدربون':'Managers & Trainers', LANG==='ar'?'صلاحيات الإدارة والتدريب':'Management & training roles') +
    `<div class="courses-row" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">
      ${trs.map(e=>{const load=SESSIONS.filter(s=>s.trainer===e.id).length;return `<div class="card" style="margin:0;text-align:center">
        <div class="av" style="width:56px;height:56px;margin:0 auto;font-size:20px;border-radius:16px;background:linear-gradient(140deg,var(--red),var(--red-dark));color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">${e.avatar}</div>
-       <h3 style="font-size:15px;margin-top:10px">${e.name}</h3><p class="sub">${e.role==='admin'?posName(e):(LANG==='ar'?'مدرب معتمد':'Certified Trainer')}</p>
-       <div style="display:flex;justify-content:center;gap:8px"><span class="tag ${e.role==='admin'?'t-red':'t-blue'}">${e.role==='admin'?'Admin':'Trainer'}</span>
+       <h3 style="font-size:15px;margin-top:10px">${e.name}</h3><p class="sub">${posName(e)||({trainer:LANG==='ar'?'مدرب':'Trainer',manager:LANG==='ar'?'مدير':'Manager',admin:'Admin'}[e.role]||e.role)}</p>
+       <div style="display:flex;justify-content:center;gap:8px"><span class="tag ${e.role==='admin'?'t-red':e.role==='manager'?'t-warn':'t-blue'}">${e.role==='admin'?'Admin':e.role==='manager'?'Manager':'Trainer'}</span>
          <span class="tag t-gray">${load} ${LANG==='ar'?'جلسة':'sessions'}</span></div></div>`;}).join("")}</div>`;
 }
 
@@ -4186,17 +4277,23 @@ if(__globalSearch){
 }
 
 
-(function restoreBahraSession(){
+(async function restoreBahraSession(){
   try{
     const empId=localStorage.getItem("bahra_session_emp");
-    if(!empId) return;
-    const u=empById(empId);
+    if(!empId || !backendReady()) return;
+    const portal=await backendRead("portalData",{empNo:empId},15000);
+    if(!portal?.ok || !portal?.employee){
+      localStorage.removeItem("bahra_session_emp");
+      localStorage.removeItem("bahra_session_route");
+      return;
+    }
+    BACKEND_DATA=portal;
+    const u=applyPortalEmployee(portal);
+    replaceEmployeeDirectory([portal.employee]);
     if(!u) return;
 
-    CURRENT=u;
     const savedRoute=localStorage.getItem("bahra_session_route") || "home";
     ROUTE=savedRoute;
-
     document.getElementById("login").style.display="none";
     document.getElementById("app").style.display="block";
     document.body.classList.add("ai-authenticated");
@@ -4205,7 +4302,7 @@ if(__globalSearch){
     buildNav();
     render();
     updateNotificationBadge();
-    syncBackendData();
+    await syncBackendData();
     aiReset();
   }catch(err){
     console.warn("Session restore failed:",err);
