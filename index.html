@@ -1808,7 +1808,7 @@ const I18N = {
   // nav
   n_home:"الرئيسية",n_courses:"الدورات التدريبية",n_content:"محتوى الدورات",n_sessions:"الجلسات التدريبية",
   n_requests:"طلبات التدريب",n_calendar:"التقويم",n_certs:"الشهادات",n_needs:"الاحتياج التدريبي",
-  n_impact:"قياس الأثر والتحليلات",n_reports:"التقارير",n_emps:"الموظفون",n_trainers:"المديرون",n_settings:"الإعدادات",
+  n_impact:"قياس الأثر والتحليلات",n_aiDash:"لوحة الذكاء الاصطناعي",n_reports:"التقارير",n_emps:"الموظفون",n_trainers:"المديرون",n_settings:"الإعدادات",
   // dashboard
   heroTitle:"معرفة اليوم ... تصنع طاقة أكبر غداً",heroSub:"منصة بحرة لتطوير الموظفين",
   heroBig1:"الطاقة",heroBig2:"تصنع الفرق",heroBig3:"بأيدينا اليوم لغدٍ أكثر إشراقاً",
@@ -3514,6 +3514,98 @@ async function loadBahraPortalData(empNo) {
 }
 async function loadBahraDashboard(empNo) {
   return await bahraApi("dashboard", {empNo}, "POST");
+}
+</script>
+
+<script id="bahra-live-integration-v2">
+/* ===== Bahra Live Integration v2 ===== */
+function escLive(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function liveCourseName(cid){const c=courseById(String(cid||'').replace(/\\_/g,'_'));return c?cName(c):String(cid||'').replace(/\\_/g,'_');}
+function livePriority(p){const ar=LANG==='ar',x=String(p||'').toLowerCase();if(x==='high')return ar?'عالية':'High';if(x==='medium')return ar?'متوسطة':'Medium';return ar?'منخفضة':'Low';}
+function liveTag(p){const x=String(p||'').toLowerCase();return x==='high'?'t-red':x==='medium'?'t-warn':'t-blue';}
+
+async function syncBackendData(){
+  if(!CURRENT||!backendReady()) return null;
+  try{
+    BACKEND_DATA=await backendPost('portalData',{empNo:String(CURRENT.empNo||CURRENT.id)});
+    updateNotificationBadge();
+    if(ROUTE==='aiDash') render();
+    return BACKEND_DATA;
+  }catch(e){console.warn('Backend sync:',e);return null;}
+}
+
+function getNotifications(){
+  const ar=LANG==='ar';
+  if(BACKEND_DATA&&Array.isArray(BACKEND_DATA.notifications)&&BACKEND_DATA.notifications.length){
+    return BACKEND_DATA.notifications.map(n=>({
+      id:String(n.NotificationID||n.id||''),ic:n.Type==='idp'?'🎯':'🎓',
+      title:ar?(n.TitleAR||n.TitleEN):(n.TitleEN||n.TitleAR),
+      text:ar?(n.MessageAR||n.MessageEN):(n.MessageEN||n.MessageAR),
+      time:n.CreatedAt?new Date(n.CreatedAt).toLocaleDateString(ar?'ar-SA':'en-GB'):'',
+      backendRead:!!n.ReadAt
+    }));
+  }
+  const first=COURSES&&COURSES[0]?COURSES[0]:null, firstCourse=first?cName(first):(ar?'دورة تدريبية':'Training course');
+  return [{id:'rec-'+(first?first.id:'course'),ic:'🎓',title:ar?'دورة موصى بها لك':'Recommended course for you',text:firstCourse,time:ar?'اليوم':'Today'}];
+}
+function getReadNotificationIds(){
+  let ids=[];try{ids=JSON.parse(localStorage.getItem(notifStorageKey())||'[]')}catch(e){}
+  if(BACKEND_DATA&&Array.isArray(BACKEND_DATA.notifications)) BACKEND_DATA.notifications.filter(n=>n.ReadAt).forEach(n=>ids.push(String(n.NotificationID)));
+  return [...new Set(ids)];
+}
+async function markNotificationRead(id){
+  const ids=getReadNotificationIds();if(!ids.includes(id)){ids.push(id);setReadNotificationIds(ids);}
+  try{if(backendReady()&&CURRENT)await backendPost('markNotificationRead',{empNo:String(CURRENT.empNo||CURRENT.id),notificationId:id});}catch(e){}
+  renderNotifications();updateNotificationBadge();
+}
+async function markAllNotificationsRead(ev){
+  if(ev)ev.stopPropagation();setReadNotificationIds(getNotifications().map(n=>n.id));
+  try{if(backendReady()&&CURRENT)await backendPost('markAllNotificationsRead',{empNo:String(CURRENT.empNo||CURRENT.id)});}catch(e){}
+  renderNotifications();updateNotificationBadge();
+}
+
+function viewAIDashboard(){
+  const ar=LANG==='ar',d=BACKEND_DATA;
+  let personal='';
+  if(!d){personal=`<div class="card"><div style="text-align:center;padding:34px;color:var(--muted)">${ar?'جاري قراءة بيانات التطوير الحقيقية…':'Loading live development data…'}</div></div>`;setTimeout(syncBackendData,80);}
+  else{
+    const needs=d.trainingNeeds||[], idp=d.idp||[], recs=d.recommendations||[];
+    personal=`<div class="kpis">
+      <div class="stat"><div class="top"><span class="lbl">${ar?'احتياجاتي التدريبية':'My training needs'}</span><div class="ic i-warn">🎯</div></div><div class="val">${needs.length}</div></div>
+      <div class="stat"><div class="top"><span class="lbl">${ar?'خطة التطوير IDP':'IDP items'}</span><div class="ic i-blue">📈</div></div><div class="val">${idp.length}</div></div>
+      <div class="stat"><div class="top"><span class="lbl">${ar?'توصيات AI':'AI recommendations'}</span><div class="ic i-red">✨</div></div><div class="val">${recs.length}</div></div>
+      <div class="stat"><div class="top"><span class="lbl">${ar?'إشعارات غير مقروءة':'Unread notifications'}</span><div class="ic i-green">🔔</div></div><div class="val">${d.unreadNotifications||0}</div></div>
+    </div>
+    <div class="grid3" style="margin-bottom:18px">
+      <div class="card"><h3>${ar?'فجوات المهارات':'Skill gaps'}</h3><p class="sub">${ar?'من محرك الاحتياج التدريبي':'From the training-needs engine'}</p>${needs.length?needs.map(n=>`<div style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div style="display:flex;justify-content:space-between;gap:10px"><b>${escLive(n.Skill)}</b><span class="tag ${liveTag(n.Priority)}">${livePriority(n.Priority)}</span></div><div style="font-size:12px;color:var(--muted);margin-top:5px">${ar?'الحالي':'Current'} ${n.CurrentLevel} / ${ar?'المطلوب':'Required'} ${n.RequiredLevel} — ${ar?'الفجوة':'Gap'} ${n.Gap}</div></div>`).join(''):`<div class="tag t-green">✓ ${ar?'لا توجد فجوات حالية':'No current gaps'}</div>`}</div>
+      <div class="card"><h3>${ar?'خطة التطوير الفردية':'Individual Development Plan'}</h3><p class="sub">${ar?'الخطة المنشأة آلياً':'AI-generated plan'}</p>${idp.length?idp.map(x=>`<div style="padding:10px 0;border-bottom:1px solid var(--line-2)"><b>${escLive(liveCourseName(x.CourseID))}</b><div style="font-size:12px;color:var(--muted);margin-top:5px">${escLive(x.Skill)} • ${livePriority(x.Priority)} • ${x.ProgressPct||0}%</div></div>`).join(''):`<div style="color:var(--muted)">${ar?'لا توجد عناصر بعد':'No items yet'}</div>`}</div>
+      <div class="card"><h3>${ar?'توصيات الذكاء الاصطناعي':'AI Recommendations'}</h3><p class="sub">${ar?'دورات مقترحة حسب الفجوات':'Courses suggested from skill gaps'}</p>${recs.length?recs.map(r=>`<div style="padding:10px 0;border-bottom:1px solid var(--line-2)"><b>${escLive(liveCourseName(r.CourseID))}</b><div style="font-size:12px;color:var(--muted);margin-top:5px">${escLive(ar?r.ReasonAR:r.ReasonEN)}</div></div>`).join(''):`<div style="color:var(--muted)">${ar?'لا توجد توصيات بعد':'No recommendations yet'}</div>`}</div>
+    </div>`;
+  }
+  const admin=CURRENT&&CURRENT.role==='admin'?`<div class="page-head" style="margin-top:8px"><div><h1 style="font-size:18px">${ar?'لوحة الموارد البشرية':'HR Dashboard'}</h1><p>${ar?'ملخص المنظمة من قاعدة البيانات':'Organization summary from the live database'}</p></div><button class="btn red" onclick="loadAIDashboard()">↻ ${ar?'تحديث':'Refresh'}</button></div><div id="aiDashBody" class="card"><div style="text-align:center;padding:28px;color:var(--muted)">${ar?'اضغط تحديث لقراءة ملخص المنظمة':'Click Refresh to load the organization summary'}</div></div>`:'';
+  return pageHead(ar?'لوحة الذكاء الاصطناعي والتطوير':'AI & Development Dashboard',ar?'بيانات حقيقية من Google Sheets ومحرك التطوير':'Live data from Google Sheets and the development engine')+personal+admin;
+}
+
+function integrationStatusRow(id,label){return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-2);font-size:13px"><span>${label}</span><b id="${id}" style="color:var(--muted)">${LANG==='ar'?'جاري الفحص…':'Checking…'}</b></div>`;}
+function viewSettings(){
+  const isAdmin=CURRENT.role==='admin',ar=LANG==='ar';
+  const base=pageHead(ar?'الإعدادات':'Settings',ar?'تخصيص المنصة والحساب':'Platform & account settings')+
+  `<div class="card"><h3>${ar?'الحساب':'Account'}</h3><div class="row2"><div class="kv"><label>${ar?'الاسم':'Name'}</label><b>${CURRENT.name}</b></div><div class="kv"><label>${ar?'الرقم الوظيفي':'Employee No.'}</label><b>${CURRENT.id}</b></div></div><div class="row2"><div class="kv"><label>${ar?'الصلاحية':'Role'}</label><b>${CURRENT.role}</b></div><div class="kv"><label>${ar?'القسم':'Dept'}</label><b>${deptName(CURRENT)}</b></div></div></div>
+  <div class="card"><h3>${ar?'التفضيلات':'Preferences'}</h3><div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line-2)"><span>${ar?'اللغة':'Language'}</span><button class="btn ghost sm" onclick="toggleLang()">${ar?'English':'العربية'}</button></div><div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0"><span>${ar?'المظهر':'Theme'}</span><button class="btn ghost sm" onclick="toggleTheme()">${THEME==='light'?(ar?'داكن':'Dark'):(ar?'فاتح':'Light')}</button></div></div>`;
+  if(!isAdmin)return base;
+  setTimeout(testLiveConnections,80);
+  return base+`<div class="card"><h3>${ar?'حالة الربط المباشر':'Live Integration Status'}</h3><p class="sub">${ar?'يتم فحص الخدمات فعلياً عند فتح الصفحة':'Services are tested live when this page opens'}</p>
+    ${integrationStatusRow('stApps','Google Apps Script (Code.gs)')}${integrationStatusRow('stSheets','Google Sheets')}${integrationStatusRow('stAI','Groq AI / Ask-Me')}${integrationStatusRow('stGitHub','GitHub Pages')}
+    <button class="btn red sm" style="margin-top:14px" onclick="testLiveConnections()">↻ ${ar?'إعادة الفحص':'Test again'}</button></div>`;
+}
+function setLiveStatus(id,ok,text){const el=document.getElementById(id);if(!el)return;el.textContent=(ok?'✓ ':'✕ ')+text;el.style.color=ok?'var(--ok)':'var(--red)';}
+async function testLiveConnections(){
+  const ar=LANG==='ar';
+  setLiveStatus('stGitHub',location.hostname.includes('github.io'),location.hostname.includes('github.io')?(ar?'يعمل':'Live'):(ar?'وضع محلي':'Local mode'));
+  if(!backendReady()){setLiveStatus('stApps',false,ar?'غير مربوط':'Not connected');setLiveStatus('stSheets',false,ar?'غير مربوط':'Not connected');setLiveStatus('stAI',false,ar?'غير مربوط':'Not connected');return;}
+  try{const r=await fetch(CONFIG.API_URL+'?action=health');const d=await r.json();setLiveStatus('stApps',!!d.ok,d.ok?(ar?'متصل':'Connected'):(ar?'خطأ':'Error'));}catch(e){setLiveStatus('stApps',false,ar?'فشل الاتصال':'Connection failed');}
+  try{const d=await backendPost('portalData',{empNo:String(CURRENT.empNo||CURRENT.id)});if(d&&d.ok){BACKEND_DATA=d;setLiveStatus('stSheets',true,ar?'متصل':'Connected');}else throw 0;}catch(e){setLiveStatus('stSheets',false,ar?'فشل القراءة':'Read failed');}
+  try{const d=await backendPost('ask',{empNo:String(CURRENT.empNo||CURRENT.id),q:ar?'اختبار اتصال فقط. أجب بكلمة تم.':'Connection test only. Reply OK.',lang:LANG,context:''});setLiveStatus('stAI',!!(d&&(d.reply||d.ok)),d&&(d.reply||d.ok)?(ar?'متصل':'Connected'):(ar?'غير متاح':'Unavailable'));}catch(e){setLiveStatus('stAI',false,ar?'تحقق من AI_API_KEY':'Check AI_API_KEY');}
 }
 </script>
 </body>
