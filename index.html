@@ -2309,9 +2309,9 @@ async function doLogin(){
   const err=document.getElementById("loginErr");
   err.classList.add("hidden");
 
-  if(!emp || pin!=="1234"){
+  if(!emp || !pin){
     err.classList.remove("hidden");
-    err.textContent = LANG==="ar" ? "الرقم الوظيفي أو رمز PIN غير صحيح." : "Wrong employee number or PIN.";
+    err.textContent = LANG==="ar" ? "أدخل الرقم الوظيفي ورمز PIN." : "Enter your employee number and PIN.";
     return;
   }
   if(!backendReady()){
@@ -2323,7 +2323,7 @@ async function doLogin(){
   const btn=document.querySelector('#login .btn-primary');
   if(btn) btn.disabled=true;
   try{
-    const portal=await backendRead("portalData",{empNo:emp},15000);
+    const portal=await backendPost("auth",{empNo:emp,pin},15000);
     if(!portal?.ok || !portal?.employee) throw new Error("Employee not found");
     BACKEND_DATA=portal;
     const u=applyPortalEmployee(portal);
@@ -2345,7 +2345,7 @@ async function doLogin(){
   }catch(e){
     console.warn("Login:",e);
     err.classList.remove("hidden");
-    err.textContent = LANG==="ar" ? "الرقم الوظيفي غير موجود في ملف Employees أو تعذر الاتصال بالبيانات." : "Employee number was not found in Employees or the database could not be reached.";
+    err.textContent = LANG==="ar" ? "الرقم الوظيفي أو رمز PIN غير صحيح، أو تعذر الاتصال بقاعدة البيانات." : "Wrong employee number or PIN, or the employee database could not be reached.";
   }finally{
     if(btn) btn.disabled=false;
   }
