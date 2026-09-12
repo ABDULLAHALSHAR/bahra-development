@@ -1448,16 +1448,39 @@ async function testBahraBackend() {
 const CONFIG = { API_URL: "https://script.google.com/macros/s/AKfycbylMry7elGuPqqUFvdVzLHjVCyRWXuFPrjmBey0dYmy76SgOi4hmlgK2rVo7RbvLZM2/exec", GROQ_MODEL: "llama-3.3-70b-versatile" };
 let BACKEND_DATA=null, BACKEND_DASHBOARD=null;
 function backendReady(){ return CONFIG.API_URL && !CONFIG.API_URL.includes("PASTE_GOOGLE_APPS_SCRIPT"); }
-async function backendPost(action,payload={}){
+async function backendPost(action,payload={},timeoutMs=15000){
   if(!backendReady()) throw new Error("Backend not configured");
-  const r=await fetch(CONFIG.API_URL,{method:"POST",body:JSON.stringify({action,...payload})});
-  const d=await r.json(); if(d && d.ok===false) throw new Error(d.error||"Backend error"); return d;
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(),timeoutMs);
+  try{
+    const r=await fetch(CONFIG.API_URL,{
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({action,...payload}),
+      signal:ctl.signal,
+      cache:"no-store"
+    });
+    const raw=await r.text();
+    let d;
+    try{d=JSON.parse(raw);}catch(_){throw new Error("Invalid backend response");}
+    if(d && d.ok===false) throw new Error(d.error||"Backend error");
+    return d;
+  }finally{clearTimeout(timer);}
 }
 async function syncBackendData(){
   if(!CURRENT||!backendReady()) return null;
+  const empNo=String(CURRENT.empNo||CURRENT.id);
   try{
-    BACKEND_DATA=await backendPost("portalData",{empNo:String(CURRENT.empNo||CURRENT.id)});
+    BACKEND_DATA=await backendPost("portalData",{empNo},12000);
     try{ updateNotificationBadge(); }catch(_){}
+
+    // Preload the AI dashboard quietly so opening it feels immediate.
+    if(CURRENT.role==="admin" || CURRENT.role==="manager"){
+      backendPost("dashboard",{empNo},12000)
+        .then(d=>{BACKEND_DASHBOARD=d; if(ROUTE==="aiDash"&&document.getElementById("aiDashBody")) renderAIDashboardData(d,BACKEND_DATA);})
+        .catch(()=>{});
+    }
+
     if(ROUTE==="aiDash" && document.getElementById("aiDashBody")) setTimeout(()=>loadAIDashboard(),0);
     return BACKEND_DATA;
   }catch(e){
@@ -2164,7 +2187,7 @@ function render(){
 /* ---------- AI / HR DASHBOARD (backend-powered) ---------- */
 function viewAIDashboard(){
   const ar=LANG==='ar';
-  return `<div class="page-head"><div><h1>${ar?'لوحة الذكاء الاصطناعي للتطوير':'AI Development Dashboard'}</h1><p>${ar?'تُقرأ البيانات تلقائياً من قاعدة البيانات عند فتح الصفحة.':'Data is read automatically from the backend when this page opens.'}</p></div><span class="tag t-green">● ${ar?'مزامنة تلقائية':'Auto Sync'}</span></div>
+  return `<div class="page-head"><div><h1>${ar?'لوحة الذكاء الاصطناعي للتطوير':'AI Development Dashboard'}</h1><p>${ar?'تحليل فجوات المهارات وخطط التطوير والتوصيات الذكية.':'Skill-gap analysis, development plans and AI recommendations.'}</p></div><span class="tag t-green">● ${ar?'مزامنة تلقائية':'Auto Sync'}</span></div>
   <div id="aiDashBody" class="card"><div style="text-align:center;padding:34px;color:var(--muted)">${backendReady()?(ar?'جاري قراءة أحدث البيانات تلقائياً...':'Loading the latest data automatically...'):(ar?'الربط غير متاح حالياً. راجع الإعدادات.':'Connection is currently unavailable. Check Settings.')}</div></div>`;
 }
 
@@ -2176,81 +2199,90 @@ function priorityTagAI(p){
   return `<span class="tag ${cls}">${label}</span>`;
 }
 
+function renderAIDashboardData(dash,portal){
+  const box=document.getElementById('aiDashBody'); if(!box)return;
+  const ar=LANG==='ar';
+  const d=dash||{}, s=d.summary||{};
+  const p=portal||BACKEND_DATA||{};
+
+  const gaps=(d.topSkillGaps||[]).map(g=>`<tr><td>${g.skill||'-'}</td><td><b>${g.totalGap||0}</b></td></tr>`).join('')
+    ||`<tr><td colspan="2">${ar?'لا توجد فجوات بعد':'No gaps yet'}</td></tr>`;
+
+  const needs=(p.trainingNeeds||[]);
+  const idp=(p.idp||[]);
+  const recs=(p.recommendations||[]);
+
+  const needsRows=needs.map(n=>`<tr>
+    <td><b>${n.Skill||'-'}</b></td><td>${n.CurrentLevel??'-'}</td><td>${n.RequiredLevel??'-'}</td>
+    <td><b>${n.Gap??'-'}</b></td><td>${priorityTagAI(n.Priority)}</td><td>${n.Status||'-'}</td>
+  </tr>`).join('')||`<tr><td colspan="6">${ar?'لا توجد احتياجات تدريبية حالياً':'No training needs found'}</td></tr>`;
+
+  const idpRows=idp.map(x=>{
+    const c=typeof courseById==='function'?courseById(x.CourseID):null;
+    const title=c?cName(c):(x.CourseID||'-');
+    const month=x.TargetMonth?new Date(x.TargetMonth).toLocaleDateString(ar?'ar-SA':'en-GB',{year:'numeric',month:'short'}):'-';
+    return `<tr><td><b>${title}</b></td><td>${x.Skill||'-'}</td><td>${priorityTagAI(x.Priority)}</td><td>${month}</td><td>${x.ProgressPct??0}%</td><td>${x.Status||'-'}</td></tr>`;
+  }).join('')||`<tr><td colspan="6">${ar?'لا توجد عناصر في خطة التطوير الفردية':'No IDP items found'}</td></tr>`;
+
+  const recRows=recs.map(r=>{
+    const c=typeof courseById==='function'?courseById(r.CourseID):null;
+    const title=c?cName(c):(r.CourseID||'-');
+    return `<tr><td><b>${title}</b></td><td>${r.Skill||'-'}</td><td>${priorityTagAI(r.Priority)}</td><td>${ar?(r.ReasonAR||''):(r.ReasonEN||'')}</td><td>${Math.round(Number(r.Confidence||0)*100)}%</td></tr>`;
+  }).join('')||`<tr><td colspan="5">${ar?'لا توجد توصيات حالياً':'No recommendations found'}</td></tr>`;
+
+  box.innerHTML=`
+    <div class="stats2" style="margin-bottom:20px">
+      <div class="stat2"><div class="s2-ic i-red">👥</div><div><div class="s2-val">${s.employees||0}</div><div class="s2-lbl">${ar?'الموظفون':'Employees'}</div></div></div>
+      <div class="stat2"><div class="s2-ic i-warn">🎯</div><div><div class="s2-val">${s.openNeeds||0}</div><div class="s2-lbl">${ar?'احتياجات مفتوحة':'Open Needs'}</div></div></div>
+      <div class="stat2"><div class="s2-ic i-red">⚠</div><div><div class="s2-val">${s.highPriorityNeeds||0}</div><div class="s2-lbl">${ar?'أولوية عالية':'High Priority'}</div></div></div>
+      <div class="stat2"><div class="s2-ic i-green">✓</div><div><div class="s2-val">${s.completionPct||0}%</div><div class="s2-lbl">${ar?'نسبة الإكمال':'Completion'}</div></div></div>
+    </div>
+
+    <div class="card" style="box-shadow:none;margin-bottom:16px">
+      <h3>${ar?'أعلى فجوات المهارات على مستوى المنظمة':'Top Organization Skill Gaps'}</h3>
+      <table><thead><tr><th>${ar?'المهارة':'Skill'}</th><th>${ar?'إجمالي الفجوة':'Total Gap'}</th></tr></thead><tbody>${gaps}</tbody></table>
+    </div>
+
+    <div class="card" style="box-shadow:none;margin-bottom:16px">
+      <h3>${ar?'احتياجاتي التدريبية':'My Training Needs'}</h3>
+      <table><thead><tr><th>${ar?'المهارة':'Skill'}</th><th>${ar?'الحالي':'Current'}</th><th>${ar?'المطلوب':'Required'}</th><th>${ar?'الفجوة':'Gap'}</th><th>${ar?'الأولوية':'Priority'}</th><th>${ar?'الحالة':'Status'}</th></tr></thead><tbody>${needsRows}</tbody></table>
+    </div>
+
+    <div class="card" style="box-shadow:none;margin-bottom:16px">
+      <h3>${ar?'خطة التطوير الفردية IDP':'Individual Development Plan (IDP)'}</h3>
+      <table><thead><tr><th>${ar?'الدورة':'Course'}</th><th>${ar?'المهارة':'Skill'}</th><th>${ar?'الأولوية':'Priority'}</th><th>${ar?'الشهر المستهدف':'Target Month'}</th><th>${ar?'التقدم':'Progress'}</th><th>${ar?'الحالة':'Status'}</th></tr></thead><tbody>${idpRows}</tbody></table>
+    </div>
+
+    <div class="card" style="box-shadow:none;margin-bottom:0">
+      <h3>${ar?'توصيات الذكاء الاصطناعي':'AI Recommendations'}</h3>
+      <table><thead><tr><th>${ar?'الدورة':'Course'}</th><th>${ar?'المهارة':'Skill'}</th><th>${ar?'الأولوية':'Priority'}</th><th>${ar?'السبب':'Reason'}</th><th>${ar?'الثقة':'Confidence'}</th></tr></thead><tbody>${recRows}</tbody></table>
+    </div>`;
+}
+
 async function loadAIDashboard(){
   const box=document.getElementById('aiDashBody'); if(!box||!CURRENT)return;
   const ar=LANG==='ar';
-  box.innerHTML='<div style="text-align:center;padding:34px">…</div>';
+  const empNo=String(CURRENT.empNo||CURRENT.id);
+
+  // Show what we already have immediately.
+  if(BACKEND_DASHBOARD || BACKEND_DATA){
+    renderAIDashboardData(BACKEND_DASHBOARD||{}, BACKEND_DATA||{});
+  }else{
+    box.innerHTML=`<div style="text-align:center;padding:34px;color:var(--muted)">${ar?'جاري تحميل لوحة التطوير...':'Loading development dashboard...'}</div>`;
+  }
+
   try{
-    const empNo=String(CURRENT.empNo||CURRENT.id);
-    const [dash, portal] = await Promise.all([
-      backendPost('dashboard',{empNo}),
-      backendPost('portalData',{empNo})
-    ]);
-    BACKEND_DASHBOARD=dash;
-    BACKEND_DATA=portal;
-    try{ updateNotificationBadge(); }catch(_){}
-
-    const d=dash||{}, s=d.summary||{};
-    const p=portal||{};
-    const gaps=(d.topSkillGaps||[]).map(g=>`<tr><td>${g.skill||'-'}</td><td><b>${g.totalGap||0}</b></td></tr>`).join('')
-      ||`<tr><td colspan="2">${ar?'لا توجد فجوات بعد':'No gaps yet'}</td></tr>`;
-
-    const needs=(p.trainingNeeds||[]);
-    const idp=(p.idp||[]);
-    const recs=(p.recommendations||[]);
-
-    const needsRows=needs.map(n=>`<tr>
-      <td><b>${n.Skill||'-'}</b></td>
-      <td>${n.CurrentLevel??'-'}</td>
-      <td>${n.RequiredLevel??'-'}</td>
-      <td><b>${n.Gap??'-'}</b></td>
-      <td>${priorityTagAI(n.Priority)}</td>
-      <td>${n.Status||'-'}</td>
-    </tr>`).join('')||`<tr><td colspan="6">${ar?'لا توجد احتياجات تدريبية حالياً':'No training needs found'}</td></tr>`;
-
-    const idpRows=idp.map(x=>{
-      const c=typeof courseById==='function'?courseById(x.CourseID):null;
-      const title=c?cName(c):(x.CourseID||'-');
-      const month=x.TargetMonth?new Date(x.TargetMonth).toLocaleDateString(ar?'ar-SA':'en-GB',{year:'numeric',month:'short'}):'-';
-      return `<tr><td><b>${title}</b></td><td>${x.Skill||'-'}</td><td>${priorityTagAI(x.Priority)}</td><td>${month}</td><td>${x.ProgressPct??0}%</td><td>${x.Status||'-'}</td></tr>`;
-    }).join('')||`<tr><td colspan="6">${ar?'لا توجد عناصر في خطة التطوير الفردية':'No IDP items found'}</td></tr>`;
-
-    const recRows=recs.map(r=>{
-      const c=typeof courseById==='function'?courseById(r.CourseID):null;
-      const title=c?cName(c):(r.CourseID||'-');
-      return `<tr><td><b>${title}</b></td><td>${r.Skill||'-'}</td><td>${priorityTagAI(r.Priority)}</td><td>${ar?(r.ReasonAR||''):(r.ReasonEN||'')}</td><td>${Math.round(Number(r.Confidence||0)*100)}%</td></tr>`;
-    }).join('')||`<tr><td colspan="5">${ar?'لا توجد توصيات حالياً':'No recommendations found'}</td></tr>`;
-
-    box.innerHTML=`
-      <div class="stats2" style="margin-bottom:20px">
-        <div class="stat2"><div class="s2-ic i-red">👥</div><div><div class="s2-val">${s.employees||0}</div><div class="s2-lbl">${ar?'الموظفون':'Employees'}</div></div></div>
-        <div class="stat2"><div class="s2-ic i-warn">🎯</div><div><div class="s2-val">${s.openNeeds||0}</div><div class="s2-lbl">${ar?'احتياجات مفتوحة':'Open Needs'}</div></div></div>
-        <div class="stat2"><div class="s2-ic i-red">⚠</div><div><div class="s2-val">${s.highPriorityNeeds||0}</div><div class="s2-lbl">${ar?'أولوية عالية':'High Priority'}</div></div></div>
-        <div class="stat2"><div class="s2-ic i-green">✓</div><div><div class="s2-val">${s.completionPct||0}%</div><div class="s2-lbl">${ar?'نسبة الإكمال':'Completion'}</div></div></div>
-      </div>
-
-      <div class="card" style="box-shadow:none;margin-bottom:16px">
-        <h3>${ar?'أعلى فجوات المهارات على مستوى المنظمة':'Top Organization Skill Gaps'}</h3>
-        <table><thead><tr><th>${ar?'المهارة':'Skill'}</th><th>${ar?'إجمالي الفجوة':'Total Gap'}</th></tr></thead><tbody>${gaps}</tbody></table>
-      </div>
-
-      <div class="card" style="box-shadow:none;margin-bottom:16px">
-        <h3>${ar?'احتياجاتي التدريبية':'My Training Needs'}</h3>
-        <p class="sub">${ar?'بيانات مباشرة من Google Sheets عبر Apps Script':'Live data from Google Sheets through Apps Script'}</p>
-        <table><thead><tr><th>${ar?'المهارة':'Skill'}</th><th>${ar?'الحالي':'Current'}</th><th>${ar?'المطلوب':'Required'}</th><th>${ar?'الفجوة':'Gap'}</th><th>${ar?'الأولوية':'Priority'}</th><th>${ar?'الحالة':'Status'}</th></tr></thead><tbody>${needsRows}</tbody></table>
-      </div>
-
-      <div class="card" style="box-shadow:none;margin-bottom:16px">
-        <h3>${ar?'خطة التطوير الفردية IDP':'Individual Development Plan (IDP)'}</h3>
-        <table><thead><tr><th>${ar?'الدورة':'Course'}</th><th>${ar?'المهارة':'Skill'}</th><th>${ar?'الأولوية':'Priority'}</th><th>${ar?'الشهر المستهدف':'Target Month'}</th><th>${ar?'التقدم':'Progress'}</th><th>${ar?'الحالة':'Status'}</th></tr></thead><tbody>${idpRows}</tbody></table>
-      </div>
-
-      <div class="card" style="box-shadow:none;margin-bottom:0">
-        <h3>${ar?'توصيات الذكاء الاصطناعي':'AI Recommendations'}</h3>
-        <table><thead><tr><th>${ar?'الدورة':'Course'}</th><th>${ar?'المهارة':'Skill'}</th><th>${ar?'الأولوية':'Priority'}</th><th>${ar?'السبب':'Reason'}</th><th>${ar?'الثقة':'Confidence'}</th></tr></thead><tbody>${recRows}</tbody></table>
-      </div>`;
+    // Portal data is normally already loaded at login. Only request it if missing.
+    const jobs=[];
+    if(!BACKEND_DATA) jobs.push(backendPost('portalData',{empNo},12000).then(x=>BACKEND_DATA=x));
+    if(!BACKEND_DASHBOARD) jobs.push(backendPost('dashboard',{empNo},12000).then(x=>BACKEND_DASHBOARD=x));
+    if(jobs.length) await Promise.all(jobs);
+    renderAIDashboardData(BACKEND_DASHBOARD||{},BACKEND_DATA||{});
   }catch(e){
-    box.innerHTML=`<div style="padding:24px;color:var(--red)">${ar?'تعذر تحميل البيانات: ':'Unable to load data: '}${String(e.message||e)}</div>`;
+    if(!(BACKEND_DASHBOARD||BACKEND_DATA)){
+      box.innerHTML=`<div style="padding:24px;color:var(--red)">${ar?'تعذر تحميل لوحة التطوير. حاول مرة أخرى بعد لحظات.':'Unable to load the development dashboard. Please try again shortly.'}</div>`;
+    }
+    console.warn("AI dashboard:",e);
   }
 }
 
@@ -2750,7 +2782,7 @@ function viewSettings(){
        ${statusRow('stGroq','Groq API (مساعد اسألني)')}
        ${statusRow('stGithub','GitHub Pages (الاستضافة)')}
      </div></div>`:''}`;
-  if(isAdmin) setTimeout(testIntegrationStatus,50);
+  if(isAdmin) setTimeout(showIntegrationStatusFast,0);
   return html;
 }
 
@@ -2760,33 +2792,46 @@ function setIntegrationStatus(id,ok,label){
   el.style.color=ok?'var(--ok)':'var(--red)';
 }
 
-async function testIntegrationStatus(){
+function showIntegrationStatusFast(){
   const ar=LANG==='ar';
-  const empNo=String(CURRENT?(CURRENT.empNo||CURRENT.id):'1001');
   setIntegrationStatus('stGithub',location.hostname.includes('github.io'),location.hostname.includes('github.io')?(ar?'يعمل':'Online'):(ar?'وضع محلي':'Local mode'));
-  if(!backendReady()){
-    setIntegrationStatus('stApps',false,ar?'غير مربوط':'Not connected');
-    setIntegrationStatus('stSheets',false,ar?'غير مربوط':'Not connected');
-    setIntegrationStatus('stGroq',false,ar?'غير مفحوص':'Not checked');
-    return;
+  setIntegrationStatus('stApps',backendReady(),backendReady()?(ar?'جاهز':'Ready'):(ar?'غير مربوط':'Not connected'));
+  setIntegrationStatus('stSheets',!!(BACKEND_DATA&&BACKEND_DATA.employee),BACKEND_DATA&&BACKEND_DATA.employee?(ar?'متصل':'Connected'):(ar?'بانتظار المزامنة':'Waiting for sync'));
+  const el=document.getElementById('stGroq');
+  if(el){el.textContent='… '+(ar?'جاهز للفحص':'Ready to check'); el.style.color='var(--muted)';}
+
+  // Lightweight checks in parallel; no AI generation and no full sheet reload.
+  if(backendReady()){
+    Promise.allSettled([
+      fetch(CONFIG.API_URL+'?action=health',{cache:'no-store'}).then(r=>r.json()),
+      fetch(CONFIG.API_URL+'?action=aiStatus',{cache:'no-store'}).then(r=>r.json())
+    ]).then(([healthRes,aiRes])=>{
+      if(healthRes.status==='fulfilled'){
+        const h=healthRes.value||{};
+        setIntegrationStatus('stApps',!!h.ok,h.ok?(ar?'متصل':'Connected'):(ar?'غير متصل':'Disconnected'));
+      }
+      if(aiRes.status==='fulfilled'){
+        const a=aiRes.value||{};
+        setIntegrationStatus('stGroq',!!a.configured,a.configured?(ar?'مفعّل':'Enabled'):(ar?'غير مفعّل':'Not enabled'));
+      }
+    });
   }
-  try{
-    const health=await fetch(CONFIG.API_URL+'?action=health',{cache:'no-store'}).then(r=>r.json());
-    setIntegrationStatus('stApps',!!health.ok,health.ok?(ar?'متصل':'Connected'):(ar?'غير متصل':'Disconnected'));
-  }catch(e){ setIntegrationStatus('stApps',false,ar?'غير متصل':'Disconnected'); }
+}
 
-  try{
-    const portal=await backendPost('portalData',{empNo});
-    const ok=!!(portal&&portal.ok&&portal.employee);
-    setIntegrationStatus('stSheets',ok,ok?(ar?'متصل':'Connected'):(ar?'غير متصل':'Disconnected'));
-  }catch(e){ setIntegrationStatus('stSheets',false,ar?'غير متصل':'Disconnected'); }
+async function testIntegrationStatus(){
+  showIntegrationStatusFast();
+  const ar=LANG==='ar';
+  if(!backendReady()) return;
 
-  // Groq stays server-side. Test safely through the existing Ask-Me endpoint; no key is exposed in the browser.
+  // Only validate Sheets when the user explicitly presses Test.
   try{
-    const ai=await backendPost('ask',{empNo,q:ar?'اختبار اتصال فقط':'Connection test only',lang:LANG,context:'connection-test'});
-    const ok=!!(ai&&(ai.reply||ai.answer));
-    setIntegrationStatus('stGroq',ok,ok?(ar?'متصل':'Connected'):(ar?'غير متصل':'Disconnected'));
-  }catch(e){ setIntegrationStatus('stGroq',false,ar?'غير متصل':'Disconnected'); }
+    const empNo=String(CURRENT?(CURRENT.empNo||CURRENT.id):'1001');
+    const portal=BACKEND_DATA&&BACKEND_DATA.employee ? BACKEND_DATA : await backendPost('portalData',{empNo},12000);
+    if(portal&&portal.employee) BACKEND_DATA=portal;
+    setIntegrationStatus('stSheets',!!(portal&&portal.employee),portal&&portal.employee?(ar?'متصل':'Connected'):(ar?'غير متصل':'Disconnected'));
+  }catch(e){
+    setIntegrationStatus('stSheets',false,ar?'غير متصل':'Disconnected');
+  }
 }
 
 
