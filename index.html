@@ -2179,6 +2179,7 @@ function render(){
    calendar:viewCalendar,certs:viewCerts,needs:viewNeeds,impact:viewImpact,aiDash:viewAIDashboard,reports:viewReports,
    emps:viewEmps,trainers:viewTrainers,settings:viewSettings,content:viewContent}[ROUTE] || viewHome;
   v.innerHTML = fn();
+  if(ROUTE==="courses") requestAnimationFrame(()=>applyGlobalCourseSearch());
   if(ROUTE==="impact") drawImpact();
   if(ROUTE==="aiDash" && backendReady()) setTimeout(()=>loadAIDashboard(),0);
 }
@@ -2436,31 +2437,59 @@ function viewCourses(){
     </div><div class="courses-row" id="courseGrid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">${rows}</div>
     <div id="courseFilterEmpty" style="display:none;text-align:center;padding:34px 18px;color:var(--muted);font-weight:700">${LANG==='ar'?'لا توجد دورات مطابقة لخيارات البحث.':'No courses match your filters.'}</div>`;
 }
+let COURSE_GLOBAL_QUERY="";
+
+function normalizeCourseSearchText(v){
+  return String(v||"")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u064B-\u065F\u0670]/g,"")
+    .replace(/ـ/g,"")
+    .replace(/[أإآ]/g,"ا")
+    .replace(/ى/g,"ي")
+    .replace(/ؤ/g,"و")
+    .replace(/ئ/g,"ي")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function applyGlobalCourseSearch(){
+  if(ROUTE!=="courses") return;
+  const box=document.getElementById("courseSearchFilter");
+  if(!box) return;
+  if(box.value!==COURSE_GLOBAL_QUERY) box.value=COURSE_GLOBAL_QUERY;
+  filterCourses();
+}
+
 function globalCourseSearch(value){
-  const q=String(value||'').trim();
-  // Global header search is dedicated to training courses/content.
-  if(q && ROUTE!=="courses"){
-    go("courses");
+  COURSE_GLOBAL_QUERY=String(value||"").trim();
+  if(ROUTE!=="courses"){
+    ROUTE="courses";
+    try{ if(CURRENT) localStorage.setItem("bahra_session_route","courses"); }catch(_){}
+    buildNav();
+    render();
+    if(window.innerWidth<=900) document.getElementById("sidebar")?.classList.remove("open");
+    document.querySelector('.view')?.scrollTo(0,0);
+    window.scrollTo(0,0);
   }
-  // Wait until the courses view has rendered, then mirror the query into its filter.
-  setTimeout(()=>{
-    const box=document.getElementById("courseSearchFilter");
-    if(!box) return;
-    box.value=q;
-    filterCourses();
-  },0);
+  requestAnimationFrame(()=>applyGlobalCourseSearch());
 }
 
 function filterCourses(){
   const level=(document.getElementById('courseLevelFilter')?.value||'').trim();
   const category=(document.getElementById('courseCategoryFilter')?.value||'').trim();
-  const q=(document.getElementById('courseSearchFilter')?.value||'').trim().toLowerCase();
+  const rawQ=(document.getElementById('courseSearchFilter')?.value||'').trim();
+  const q=normalizeCourseSearchText(rawQ);
+  COURSE_GLOBAL_QUERY=rawQ;
+  const globalBox=document.getElementById('globalSearch');
+  if(globalBox && globalBox.value!==rawQ) globalBox.value=rawQ;
   const cards=[...document.querySelectorAll('#courseGrid .course')];
   let shown=0;
   cards.forEach(card=>{
     const okLevel=!level||card.dataset.level===level;
     const okCategory=!category||card.dataset.category===category;
-    const okSearch=!q||(card.dataset.search||'').includes(q);
+    const haystack=normalizeCourseSearchText(card.dataset.search||card.textContent||'');
+    const okSearch=!q||haystack.includes(q);
     const show=okLevel&&okCategory&&okSearch;
     card.style.display=show?'':'none';
     if(show) shown++;
@@ -3740,20 +3769,71 @@ function printAdminReport(scope='all'){
 }
 
 /* ---------- CONTENT MANAGEMENT (admin/trainer) ---------- */
+function dynamicCourseRecord(cid){
+  return (STORE.courses||[]).find(c=>String(c.id)===String(cid)) || null;
+}
+function trainerAssignedCourseIds(){
+  if(!CURRENT || CURRENT.role!=="trainer") return new Set();
+  return new Set(SESSIONS.filter(s=>String(s.trainer)===String(CURRENT.id)).map(s=>String(s.course)));
+}
+function trainerCanEditCourse(cid){
+  if(!CURRENT) return false;
+  if(CURRENT.role==="admin") return true;
+  if(CURRENT.role!=="trainer") return false;
+  if(trainerAssignedCourseIds().has(String(cid))) return true;
+  const rec=dynamicCourseRecord(cid);
+  return !!(rec && String(rec.createdBy)===String(CURRENT.id) && String(rec.approvalStatus||"").toLowerCase()==="approved");
+}
+function trainerOwnPendingCourses(){
+  if(!CURRENT || CURRENT.role!=="trainer") return [];
+  return (STORE.courses||[]).filter(c=>String(c.createdBy)===String(CURRENT.id) && String(c.approvalStatus||"pending").toLowerCase()!=="approved");
+}
+function contentVisibleCourses(){
+  if(!CURRENT) return [];
+  if(CURRENT.role==="admin") return COURSES;
+  if(CURRENT.role!=="trainer") return [];
+  const assigned=trainerAssignedCourseIds();
+  return COURSES.filter(c=>{
+    if(assigned.has(String(c.id))) return true;
+    const rec=dynamicCourseRecord(c.id);
+    return !!(rec && String(rec.createdBy)===String(CURRENT.id));
+  });
+}
+function courseApprovalBadge(c){
+  const rec=dynamicCourseRecord(c.id);
+  if(!rec || !rec.createdBy) return `<span class="tag t-blue">${LANG==='ar'?'مسندة':'Assigned'}</span>`;
+  const st=String(rec.approvalStatus||"pending").toLowerCase();
+  if(st==="approved") return `<span class="tag t-green">${LANG==='ar'?'معتمدة':'Approved'}</span>`;
+  if(st==="rejected") return `<span class="tag t-red">${LANG==='ar'?'مرفوضة':'Rejected'}</span>`;
+  return `<span class="tag t-warn">${LANG==='ar'?'بانتظار اعتماد الموارد البشرية':'Pending HR approval'}</span>`;
+}
+function approveTrainerCourse(cid,status){
+  if(!CURRENT || CURRENT.role!=="admin"){toast(LANG==='ar'?'الاعتماد للموارد البشرية فقط':'HR/Admin approval only');return;}
+  const rec=dynamicCourseRecord(cid); if(!rec) return;
+  rec.approvalStatus=status; rec.approvedBy=CURRENT.id; rec.approvedAt=new Date().toISOString();
+  saveStore(); render();
+  toast(status==='approved'?(LANG==='ar'?'تم اعتماد الدورة':'Course approved'):(LANG==='ar'?'تم رفض الدورة':'Course rejected'));
+}
 function viewContent(){
   const canEdit=CURRENT.role!=="employee";
   const actions=canEdit?`<div class="admin-actions">${CURRENT.role==='admin'?adminExportActions('content'):''}<button class="btn red" onclick="newCourse()">＋ ${LANG==='ar'?'دورة جديدة':'New course'}</button></div>`:'';
-  return pageHead(LANG==='ar'?'إدارة محتوى الدورات':'Course Content Management',
-    LANG==='ar'?'أضف دورات ودروساً وأسئلة اختبار':'Add courses, lessons and exam questions',actions)+
+  const visible=contentVisibleCourses();
+  const sub=CURRENT.role==='trainer'
+    ? (LANG==='ar'?'يمكنك إدارة الدورات المسندة لك فقط، أو الدورات التي أنشأتها بعد اعتماد الموارد البشرية':'You can manage only courses assigned to you, or courses you created after HR approval')
+    : (LANG==='ar'?'أضف دورات ودروساً وأسئلة اختبار واعتمد دورات المدربين':'Add courses, lessons and exam questions, and approve trainer courses');
+  return pageHead(LANG==='ar'?'إدارة محتوى الدورات':'Course Content Management',sub,actions)+
    `<div class="card"><table><thead><tr><th>${LANG==='ar'?'الدورة':'Course'}</th><th>${LANG==='ar'?'المستوى':'Level'}</th>
-     <th>${LANG==='ar'?'الدروس':'Lessons'}</th><th>${LANG==='ar'?'أسئلة الاختبار':'Exam Qs'}</th><th>${LANG==='ar'?'مسجّلون':'Enrolled'}</th><th></th></tr></thead>
-     <tbody>${COURSES.map(c=>{const cont=courseContent(c.id);
+     <th>${LANG==='ar'?'الدروس':'Lessons'}</th><th>${LANG==='ar'?'أسئلة الاختبار':'Exam Qs'}</th><th>${LANG==='ar'?'مسجّلون':'Enrolled'}</th><th>${LANG==='ar'?'الحالة':'Status'}</th><th></th></tr></thead>
+     <tbody>${visible.map(c=>{const cont=courseContent(c.id);
        const enr=Object.values(STORE.enroll).filter(u=>u[c.id]).length;
-       return `<tr><td><b>${cName(c)}</b></td><td>${lvlLabel(c)}</td><td>${cont.lessons.length}</td><td>${cont.exam.length}</td><td>${enr}</td>
-       <td><button class="btn ghost sm" onclick="manageCourse('${c.id}')">${LANG==='ar'?'إدارة':'Manage'}</button></td></tr>`;}).join("")}
+       const editable=trainerCanEditCourse(c.id); const rec=dynamicCourseRecord(c.id);
+       let btn=editable?`<button class="btn ghost sm" onclick="manageCourse('${c.id}')">${LANG==='ar'?'إدارة':'Manage'}</button>`:`<span class="tag t-gray">${LANG==='ar'?'عرض فقط':'View only'}</span>`;
+       if(CURRENT.role==='admin' && rec && rec.createdBy && String(rec.approvalStatus||'pending').toLowerCase()==='pending') btn=`<div style="display:flex;gap:6px"><button class="btn red sm" onclick="approveTrainerCourse('${c.id}','approved')">${LANG==='ar'?'اعتماد':'Approve'}</button><button class="btn ghost sm" onclick="approveTrainerCourse('${c.id}','rejected')">${LANG==='ar'?'رفض':'Reject'}</button></div>`;
+       return `<tr><td><b>${cName(c)}</b>${rec&&rec.createdBy?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${LANG==='ar'?'أنشأها المدرب':'Created by trainer'} #${rec.createdBy}</div>`:''}</td><td>${lvlLabel(c)}</td><td>${cont.lessons.length}</td><td>${cont.exam.length}</td><td>${enr}</td><td>${courseApprovalBadge(c)}</td><td>${btn}</td></tr>`;}).join("") || `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted)">${LANG==='ar'?'لا توجد دورات متاحة لك حالياً':'No courses available to you currently'}</td></tr>`}
      </tbody></table></div>`;
 }
 function manageCourse(cid){
+  if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا يمكنك تعديل هذه الدورة. صلاحيتك مقتصرة على دوراتك المعتمدة أو المسندة لك':'You cannot edit this course. Your access is limited to your approved or assigned courses');return;}
   const c=courseById(cid); const cont=courseContent(cid);
   openModal(`<div class="mh"><h3>${LANG==='ar'?'إدارة':'Manage'}: ${cName(c)}</h3><button class="x" onclick="closeModal()">✕</button></div>
    <div class="mb">
@@ -3774,6 +3854,7 @@ function manageCourse(cid){
    </div>`);
 }
 function addLesson(cid){
+  if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا توجد لديك صلاحية تعديل هذه الدورة':'No permission to edit this course');return;}
   const t=document.getElementById("nlT").value.trim(), b=document.getElementById("nlB").value.trim();
   if(!t){ toast(LANG==='ar'?'أدخل عنوان الدرس':'Enter title'); return; }
   STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[]};
@@ -3781,6 +3862,7 @@ function addLesson(cid){
   manageCourse(cid); toast(LANG==='ar'?'تمت إضافة الدرس':'Lesson added');
 }
 function addQ(cid){
+  if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا توجد لديك صلاحية تعديل هذه الدورة':'No permission to edit this course');return;}
   const q=document.getElementById("nqQ").value.trim(), a=document.getElementById("nqA").value.trim(), b=document.getElementById("nqB").value.trim();
   if(!q||!a||!b){ toast(LANG==='ar'?'أكمل الحقول':'Complete fields'); return; }
   STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[]};
@@ -3788,14 +3870,16 @@ function addQ(cid){
   manageCourse(cid); toast(LANG==='ar'?'تمت إضافة السؤال':'Question added');
 }
 function newCourse(){
+  if(!CURRENT || !["admin","trainer"].includes(CURRENT.role)){toast(LANG==='ar'?'لا توجد صلاحية':'No permission');return;}
   openModal(`<div class="mh"><h3>${LANG==='ar'?'دورة جديدة':'New course'}</h3><button class="x" onclick="closeModal()">✕</button></div>
    <div class="mb">
+     ${CURRENT.role==='trainer'?`<div class="tag t-warn" style="margin-bottom:14px">${LANG==='ar'?'سيتم إرسال الدورة للموارد البشرية للاعتماد قبل السماح لك بتعديل محتواها':'The course will be sent to HR for approval before content editing is enabled'}</div>`:''}
      <div class="kv"><label>${LANG==='ar'?'اسم الدورة':'Course name'}</label><input id="ncN" class="fin"></div>
      <div class="row2"><div class="kv"><label>${LANG==='ar'?'المستوى':'Level'}</label>
        <select id="ncL" class="fin"><option value="req">${t('lvl_req')}</option><option value="basic">${t('lvl_basic')}</option><option value="mid" selected>${t('lvl_mid')}</option><option value="adv">${t('lvl_adv')}</option></select></div>
        <div class="kv"><label>${LANG==='ar'?'عدد الساعات':'Hours'}</label><input id="ncH" class="fin" type="number" value="6"></div></div>
      <div class="kv"><label>${LANG==='ar'?'وصف مختصر':'Description'}</label><textarea id="ncD" class="fin" rows="2"></textarea></div>
-     <button class="btn red" style="width:100%" onclick="saveCourse()">${LANG==='ar'?'إنشاء الدورة':'Create course'}</button>
+     <button class="btn red" style="width:100%" onclick="saveCourse()">${CURRENT.role==='trainer'?(LANG==='ar'?'إرسال للاعتماد':'Submit for approval'):(LANG==='ar'?'إنشاء الدورة':'Create course')}</button>
    </div>`);
 }
 function saveCourse(){
@@ -3803,10 +3887,13 @@ function saveCourse(){
   const lvl=document.getElementById("ncL").value, h=+document.getElementById("ncH").value||6, d=document.getElementById("ncD").value.trim();
   const id="c_new"+(STORE.seq++);
   const lvlMap={req:"إلزامي",basic:"مستوى أساسي",mid:"مستوى متوسط",adv:"مستوى متقدم"};
-  const created={id, ar:n, en:n, lvl:lvlMap[lvl], lvlk:lvl, cat:"عام", hours:h, lessons:0, cover:"pm", desc:d||n};
+  const trainerCreated=CURRENT && CURRENT.role==='trainer';
+  const created={id, ar:n, en:n, lvl:lvlMap[lvl], lvlk:lvl, cat:"عام", hours:h, lessons:0, cover:"pm", desc:d||n,
+    createdBy:CURRENT?CURRENT.id:null, approvalStatus:trainerCreated?'pending':'approved', createdAt:new Date().toISOString()};
   COURSES.push(created); STORE.courses=STORE.courses||[]; STORE.courses.push(created);
   STORE.content[id]={lessons:[],exam:[]}; saveStore();
-  closeModal(); go('content'); toast(LANG==='ar'?'تم إنشاء الدورة — أضف لها دروساً':'Course created — add lessons');
+  closeModal(); go('content');
+  toast(trainerCreated?(LANG==='ar'?'تم إرسال الدورة للموارد البشرية للاعتماد':'Course submitted to HR for approval'):(LANG==='ar'?'تم إنشاء الدورة':'Course created'));
 }
 
 
@@ -3838,6 +3925,13 @@ applyLangDir();
 setTimeout(()=>{const q=new URLSearchParams(location.search).get('verify');if(q)showVerification(q);},250);
 document.getElementById("fEmp").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("fPin").focus();});
 document.getElementById("fPin").addEventListener("keydown",e=>{if(e.key==="Enter")doLogin();});
+const __globalSearch=document.getElementById("globalSearch");
+if(__globalSearch){
+  __globalSearch.addEventListener("input",e=>globalCourseSearch(e.target.value));
+  __globalSearch.addEventListener("keydown",e=>{
+    if(e.key==="Escape"){ e.target.value=""; globalCourseSearch(""); e.target.blur(); }
+  });
+}
 
 
 (function restoreBahraSession(){
