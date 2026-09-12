@@ -1933,7 +1933,7 @@ const NAV = [
  {k:"courses",  ic:"courses", roles:["admin","trainer","employee"]},
  {k:"content",  ic:"content", roles:["admin","trainer"]},
  {k:"sessions", ic:"sessions", roles:["admin","trainer","employee"]},
- {k:"requests", ic:"requests", roles:["admin","trainer","employee"], badge:()=>reqList().filter(r=>r.status==="review").length},
+ {k:"requests", ic:"requests", roles:["admin","trainer","employee"], badge:()=>CURRENT&&CURRENT.role==="admin"?reqList().filter(r=>r.status==="review").length:CURRENT&&CURRENT.role==="trainer"?trainerApprovedRequests().length:0},
  {k:"calendar", ic:"calendar", roles:["admin","trainer","employee"]},
  {k:"certs",    ic:"certs", roles:["admin","trainer","employee"]},
  {k:"needs",    ic:"needs", roles:["admin","trainer"]},
@@ -2161,7 +2161,7 @@ function buildNav(){
   nav.innerHTML = NAV.filter(n=>n.roles.includes(CURRENT.role)).map(n=>{
     const b = n.badge ? n.badge():0;
     return `<a href="#" onclick="go('${n.k}');return false" class="${n.k===ROUTE?'active':''}">
-      <span class="ic">${icon(n.ic)}</span><span>${t('n_'+n.k)}</span>
+      <span class="ic">${icon(n.ic)}</span><span>${(CURRENT.role==='trainer'&&n.k==='requests')?(LANG==='ar'?'المتدربون في دوراتي':'Trainees in My Courses'):t('n_'+n.k)}</span>
       ${b?`<span class="badge">${b}</span>`:''}</a>`;
   }).join("");
 }
@@ -2493,60 +2493,83 @@ function openCourse(cid){ const c=courseById(cid);
      <span class="tag ${i<2?'t-green':'t-gray'}">${i<2?'✓':i+1}</span><b>${LANG==='ar'?'الدرس':'Lesson'} ${i+1}</b></div>`).join("")}</div>`);
 }
 
+/* ---------- TRAINER ACCESS HELPERS ---------- */
+function trainerSessions(){
+  if(!CURRENT || CURRENT.role!=="trainer") return [];
+  return SESSIONS.filter(s=>String(s.trainer)===String(CURRENT.id));
+}
+function trainerCourseIds(){ return new Set(trainerSessions().map(s=>String(s.course))); }
+function trainerApprovedRequests(){
+  const ids=trainerCourseIds();
+  return reqList().filter(r=>r.status==="approved" && ids.has(String(r.course)));
+}
+
 /* ---------- SESSIONS ---------- */
 function viewSessions(){
-  const isTrainer = CURRENT.role!=="employee";
-  return pageHead(LANG==='ar'?'الجلسات التدريبية':'Training Sessions',
-    LANG==='ar'?'الجلسات الحضورية القادمة وإدارة الحضور والتقييم':'Upcoming in-person sessions, attendance & evaluation') +
+  const isAdmin = CURRENT.role==="admin";
+  const isTrainer = CURRENT.role==="trainer";
+  const visibleSessions = isTrainer ? trainerSessions() : SESSIONS;
+  return pageHead(LANG==='ar'?(isTrainer?'جلساتي التدريبية':'الجلسات التدريبية'):(isTrainer?'My Training Sessions':'Training Sessions'),
+    LANG==='ar'?(isTrainer?'الجلسات المسندة لك — إدارة الحضور والتقييم للمتدربين المسجلين':'الجلسات الحضورية القادمة وإدارة الحضور والتقييم'):(isTrainer?'Sessions assigned to you — manage enrolled trainees, attendance and scores':'Upcoming in-person sessions, attendance & evaluation')) +
    `<div class="courses-row" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
-   ${SESSIONS.map(ss=>{const c=courseById(ss.course);const tr=empById(ss.trainer);const full=ss.enrolled>=ss.cap;return `
+   ${visibleSessions.map(ss=>{const c=courseById(ss.course);const tr=empById(ss.trainer);const full=ss.enrolled>=ss.cap;return `
      <div class="card" style="margin:0">
        <div style="display:flex;gap:14px;align-items:flex-start">
          <div class="date" style="width:60px;text-align:center;background:var(--red-soft);border-radius:12px;padding:10px 4px">
            <b style="display:block;font-size:22px;font-weight:800;color:var(--red)">${ss.day}</b><span style="font-size:11px;color:var(--red-2)">${ss.mon}</span></div>
          <div style="flex:1"><h3 style="font-size:15px">${ss.title}</h3>
            <div style="display:flex;flex-wrap:wrap;gap:12px;color:var(--muted);font-size:12.5px;margin-top:8px">
-             <span> ${ss.time}</span><span> ${ss.room}</span><span> ${tr?tr.name:'-'}</span></div>
+             <span>${ss.time}</span><span>${ss.room}</span><span>${tr?tr.name:'-'}</span></div>
            <div class="needbar" style="margin-top:12px"><div class="bt"><i style="width:${Math.round(ss.enrolled/ss.cap*100)}%;background:${full?'var(--red)':'var(--ok)'}"></i></div>
              <span style="font-size:12px;color:var(--muted);white-space:nowrap">${ss.enrolled}/${ss.cap}</span></div>
            <div style="display:flex;gap:8px;margin-top:12px">
-             ${isTrainer?`<button class="btn ghost sm" onclick="openAttendance('${ss.id}')">${LANG==='ar'?'الحضور والتقييم':'Attendance'}</button>`:''}
-             <button class="btn ${full?'ghost':'red'} sm" onclick="${full?'':'requestCourse(\''+ss.course+'\')'}">${full?(LANG==='ar'?'مكتمل':'Full'):(LANG==='ar'?'حجز مقعد':'Reserve')}</button>
-           </div></div></div></div>`;}).join("")}</div>`;
+             ${(isTrainer||isAdmin)?`<button class="btn ghost sm" onclick="openAttendance('${ss.id}')">${LANG==='ar'?'الحضور والتقييم':'Attendance & Scores'}</button>`:''}
+             ${(!isTrainer&&!isAdmin)?`<button class="btn ${full?'ghost':'red'} sm" onclick="${full?'':'requestCourse(\''+ss.course+'\')'}">${full?(LANG==='ar'?'مكتمل':'Full'):(LANG==='ar'?'حجز مقعد':'Reserve')}</button>`:''}
+           </div></div></div></div>`;}).join("") || emptyState(LANG==='ar'?'لا توجد جلسات مسندة لك حالياً':'No sessions are currently assigned to you')}</div>`;
 }
-function openAttendance(sid){ const ss=SESSIONS.find(x=>x.id===sid);
-  const sample=EMPLOYEES.slice(6,14);
+function openAttendance(sid){
+  const ss=SESSIONS.find(x=>x.id===sid); if(!ss) return;
+  const allowed = CURRENT.role==="admin" || (CURRENT.role==="trainer" && String(ss.trainer)===String(CURRENT.id));
+  if(!allowed){ toast(LANG==='ar'?'ليس لديك صلاحية لإدارة هذه الجلسة':'You do not have permission to manage this session'); return; }
+  const approved=reqList().filter(r=>r.status==="approved" && String(r.course)===String(ss.course));
+  const trainees=approved.map(r=>empById(r.emp)).filter(Boolean);
   openModal(`<div class="mh"><h3>${LANG==='ar'?'الحضور والتقييم':'Attendance & Evaluation'} — ${ss.title}</h3><button class="x" onclick="closeModal()">✕</button></div>
-   <div class="mb"><table><thead><tr><th>${LANG==='ar'?'الموظف':'Employee'}</th><th>${LANG==='ar'?'الحضور':'Attendance'}</th><th>${LANG==='ar'?'التقييم':'Score'}</th></tr></thead>
-   <tbody>${sample.map(e=>`<tr><td>${e.name}</td><td><span class="tag ${rnd()>.2?'t-green':'t-red'}">${rnd()>.2?(LANG==='ar'?'حاضر':'Present'):(LANG==='ar'?'غائب':'Absent')}</span></td>
-     <td><input style="width:70px;height:32px;border:1px solid var(--line);border-radius:8px;padding:0 8px;background:var(--card);color:var(--ink)" value="${ri(70,98)}"/></td></tr>`).join("")}</tbody></table>
-   <button class="btn red sm" style="margin-top:14px" onclick="closeModal();toast('${LANG==='ar'?'تم حفظ الحضور والتقييم':'Saved'}')">${LANG==='ar'?'حفظ':'Save'}</button></div>`);
+   <div class="mb">${trainees.length?`<table><thead><tr><th>${LANG==='ar'?'الموظف':'Employee'}</th><th>${LANG==='ar'?'الحضور':'Attendance'}</th><th>${LANG==='ar'?'التقييم':'Score'}</th></tr></thead>
+   <tbody>${trainees.map(e=>`<tr><td>${e.name}</td><td><select class="fin" style="height:34px"><option>${LANG==='ar'?'حاضر':'Present'}</option><option>${LANG==='ar'?'غائب':'Absent'}</option></select></td>
+     <td><input type="number" min="0" max="100" class="fin" style="width:80px;height:34px" placeholder="0-100"/></td></tr>`).join("")}</tbody></table>
+   <button class="btn red sm" style="margin-top:14px" onclick="closeModal();toast('${LANG==='ar'?'تم حفظ الحضور والتقييم':'Attendance and scores saved'}')">${LANG==='ar'?'حفظ':'Save'}</button>`:emptyState(LANG==='ar'?'لا يوجد متدربون معتمدون في هذه الدورة حالياً':'No approved trainees for this course yet')}</div>`);
 }
 
 /* ---------- REQUESTS ---------- */
 function viewRequests(){
-  const isAdmin = CURRENT.role!=="employee";
-  const list = isAdmin ? reqList() : reqList().filter(r=>r.emp===CURRENT.id);
-  const statTag = s => s==="approved"?`<span class="tag t-green">✓ ${t('s_approved')}</span>`
-    : s==="rejected"?`<span class="tag t-red">✕ ${t('s_rejected')}</span>`
-    : `<span class="tag t-warn"> ${t('s_review')}</span>`;
-  return pageHead(LANG==='ar'?'طلبات التدريب':'Training Requests',
-    isAdmin?(LANG==='ar'?'مراجعة واعتماد الطلبات — الاعتماد يسجّل الموظف بالدورة تلقائياً':'Approve to auto-enroll the employee')
-           :(LANG==='ar'?'حالة طلباتك التدريبية':'Your training requests status')) +
+  const isAdmin = CURRENT.role==="admin";
+  const isTrainer = CURRENT.role==="trainer";
+  const list = isAdmin ? reqList() : isTrainer ? trainerApprovedRequests() : reqList().filter(r=>r.emp===CURRENT.id);
+  const statTag = st => st==="approved"?`<span class="tag t-green">✓ ${t('s_approved')}</span>`
+    : st==="rejected"?`<span class="tag t-red">✕ ${t('s_rejected')}</span>`
+    : `<span class="tag t-warn">${t('s_review')}</span>`;
+  const title = isTrainer ? (LANG==='ar'?'المتدربون في دوراتي':'Trainees in My Courses') : (LANG==='ar'?'طلبات التدريب':'Training Requests');
+  const sub = isAdmin ? (LANG==='ar'?'مراجعة واعتماد الطلبات — الاعتماد يسجّل الموظف بالدورة تلقائياً':'Approve to auto-enroll the employee')
+    : isTrainer ? (LANG==='ar'?'عرض الموظفين المعتمد تسجيلهم في الدورات المسندة لك — بدون صلاحية اعتماد أو رفض':'Approved employees in your assigned courses — view only; no approve/reject permission')
+    : (LANG==='ar'?'حالة طلباتك التدريبية':'Your training requests status');
+  return pageHead(title,sub) +
    `<div class="card"><table><thead><tr>
-     ${isAdmin?`<th>${LANG==='ar'?'الموظف':'Employee'}</th><th>${LANG==='ar'?'القسم':'Dept'}</th>`:''}
+     ${(isAdmin||isTrainer)?`<th>${LANG==='ar'?'الموظف':'Employee'}</th><th>${LANG==='ar'?'القسم':'Dept'}</th>`:''}
      <th>${LANG==='ar'?'الدورة':'Course'}</th><th>${LANG==='ar'?'التاريخ':'Date'}</th>
      <th>${LANG==='ar'?'الحالة':'Status'}</th>${isAdmin?`<th>${LANG==='ar'?'إجراء':'Action'}</th>`:''}</tr></thead>
      <tbody>${list.map(r=>{const e=empById(r.emp);const c=courseById(r.course);return `<tr>
-       ${isAdmin?`<td>${e?e.name:'-'}</td><td>${e?deptName(e):'-'}</td>`:''}
+       ${(isAdmin||isTrainer)?`<td>${e?e.name:'-'}</td><td>${e?deptName(e):'-'}</td>`:''}
        <td><b>${c?cName(c):r.course}</b></td><td>${r.date}</td><td>${statTag(r.status)}</td>
        ${isAdmin?`<td>${r.status==="review"?`<div style="display:flex;gap:6px">
          <button class="btn red sm" onclick="decideReq('${r.id}','approved')">${LANG==='ar'?'اعتماد':'Approve'}</button>
          <button class="btn ghost sm" onclick="decideReq('${r.id}','rejected')">${LANG==='ar'?'رفض':'Reject'}</button></div>`:'—'}</td>`:''}
-       </tr>`;}).join("")}</tbody></table></div>`;
+       </tr>`;}).join("") || `<tr><td colspan="${isAdmin?6:(isTrainer?5:3)}" style="text-align:center;padding:28px;color:var(--muted)">${LANG==='ar'?(isTrainer?'لا يوجد متدربون معتمدون في دوراتك حالياً':'لا توجد طلبات حالياً'):(isTrainer?'No approved trainees in your courses yet':'No requests found')}</td></tr>`}</tbody></table></div>`;
 }
-function setReq(id,st){ const r=REQUESTS.find(x=>x.id===id); if(r)r.status=st; buildNav(); render();
-  toast(st==="approved"?(LANG==='ar'?'تم اعتماد الطلب':'Approved'):(LANG==='ar'?'تم رفض الطلب':'Rejected')); }
+function setReq(id,st){
+  if(!CURRENT || CURRENT.role!=="admin"){toast(LANG==='ar'?'صلاحية الاعتماد والرفض للموارد البشرية فقط':'Approve/reject permission is restricted to HR/Admin');return;}
+  const r=REQUESTS.find(x=>x.id===id); if(r)r.status=st; buildNav(); render();
+  toast(st==="approved"?(LANG==='ar'?'تم اعتماد الطلب':'Approved'):(LANG==='ar'?'تم رفض الطلب':'Rejected'));
+}
 
 /* ---------- CALENDAR ---------- */
 function viewCalendar(){
@@ -3356,6 +3379,7 @@ function requestCourse(cid){
   toast(LANG==='ar'?'تم إرسال طلبك — بانتظار اعتماد المدير':'Request submitted — pending approval');
 }
 function decideReq(id,status){
+  if(!CURRENT || CURRENT.role!=="admin"){toast(LANG==='ar'?'صلاحية الاعتماد والرفض للموارد البشرية فقط':'Approve/reject permission is restricted to HR/Admin');return;}
   const r=reqList().find(x=>x.id===id); if(!r) return;
   r.status=status;
   if(status==="approved") ensureEnroll(r.emp, r.course);   // enrollment activated
