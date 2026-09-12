@@ -1438,7 +1438,7 @@ async function testBahraBackend() {
      مساعد «اسألني» عبر Groq وقراءة البيانات من Google Sheets.
    - اتركه فارغاً "" لتشغيل المنصة بالكامل بدون إنترنت (الوضع المحلي).
    ============================================================ */
-const CONFIG = { API_URL: "PASTE_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE", GROQ_MODEL: "llama-3.3-70b-versatile" };
+const CONFIG = { API_URL: "https://script.google.com/macros/s/AKfycbylMry7elGuPqqUFvdVzLHjVCyRWXuFPrjmBey0dYmy76SgOi4hmlgK2rVo7RbvLZM2/exec", GROQ_MODEL: "llama-3.3-70b-versatile" };
 let BACKEND_DATA=null, BACKEND_DASHBOARD=null;
 function backendReady(){ return CONFIG.API_URL && !CONFIG.API_URL.includes("PASTE_GOOGLE_APPS_SCRIPT"); }
 async function backendPost(action,payload={}){
