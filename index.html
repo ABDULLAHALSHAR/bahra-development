@@ -1324,6 +1324,27 @@ async function testBahraBackend() {
   catch(e) { return {ok:false,error:String(e)}; }
 }
 </script>
+
+<style id="v19-login-language-layout-fix">
+/* v19 — Correct login layout when switching Arabic / English */
+#login .login-card{grid-template-columns:1.95fr 1fr !important;}
+#login .login-form{order:1 !important;}
+#login .login-promo{order:2 !important;background:#101319 !important;}
+#login .login-promo .promo-img{
+  width:100% !important;height:100% !important;
+  object-fit:cover !important;object-position:center center !important;
+  background:#101319 !important;filter:none !important;transform:none !important;
+}
+html[dir="rtl"] #login .login-card{grid-template-columns:1fr 1.95fr !important;}
+html[dir="rtl"] #login .login-promo{order:1 !important;}
+html[dir="rtl"] #login .login-form{order:2 !important;}
+@media(max-width:760px){
+  #login .login-card,html[dir="rtl"] #login .login-card{grid-template-columns:1fr !important;}
+  #login .login-promo,html[dir="rtl"] #login .login-promo{order:1 !important;aspect-ratio:16/9 !important;height:auto !important;}
+  #login .login-form,html[dir="rtl"] #login .login-form{order:2 !important;}
+  #login .login-promo .promo-img{object-fit:cover !important;}
+}
+</style>
 </head>
 <body>
 
