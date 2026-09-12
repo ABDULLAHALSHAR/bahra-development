@@ -1445,9 +1445,31 @@ async function testBahraBackend() {
      مساعد «اسألني» عبر Groq وقراءة البيانات من Google Sheets.
    - اتركه فارغاً "" لتشغيل المنصة بالكامل بدون إنترنت (الوضع المحلي).
    ============================================================ */
-const CONFIG = { API_URL: "https://script.google.com/macros/s/AKfycby1scyg9y_a8uvXKrPpmGs5cLFB7fUdYR848cD-rnQxKAbKudxjQFAs58hX5UxTmYV_/exec", GROQ_MODEL: "llama-3.3-70b-versatile" };
+const CONFIG = { API_URL: "https://script.google.com/macros/s/AKfycby1scyg9y_a8uvXKrPpmGs5cLFB7fUdYR848cD-rnQxKAbKudxjQFAs58hX5UxTmYV_/exec", GROQ_MODEL: "openai/gpt-oss-120b" };
 let BACKEND_DATA=null, BACKEND_DASHBOARD=null;
 function backendReady(){ return CONFIG.API_URL && !CONFIG.API_URL.includes("PASTE_GOOGLE_APPS_SCRIPT"); }
+async function backendGet(action,payload={},timeoutMs=15000){
+  if(!backendReady()) throw new Error("Backend not configured");
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(),timeoutMs);
+  try{
+    const qs=new URLSearchParams({action,...payload}).toString();
+    const r=await fetch(CONFIG.API_URL+"?"+qs,{method:"GET",signal:ctl.signal,cache:"no-store"});
+    const raw=await r.text();
+    let d;
+    try{d=JSON.parse(raw);}catch(_){throw new Error("Invalid backend response");}
+    if(d && d.ok===false) throw new Error(d.error||"Backend error");
+    return d;
+  }finally{clearTimeout(timer);}
+}
+async function backendRead(action,payload={},timeoutMs=15000){
+  // Read-only data prefers GET because Apps Script Web Apps handle it more reliably across browsers.
+  try{return await backendGet(action,payload,timeoutMs);}
+  catch(getErr){
+    try{return await backendPost(action,payload,timeoutMs);}
+    catch(postErr){throw getErr;}
+  }
+}
 async function backendPost(action,payload={},timeoutMs=15000){
   if(!backendReady()) throw new Error("Backend not configured");
   const ctl=new AbortController();
@@ -1471,12 +1493,12 @@ async function syncBackendData(){
   if(!CURRENT||!backendReady()) return null;
   const empNo=String(CURRENT.empNo||CURRENT.id);
   try{
-    BACKEND_DATA=await backendPost("portalData",{empNo},12000);
+    BACKEND_DATA=await backendRead("portalData",{empNo},15000);
     try{ updateNotificationBadge(); }catch(_){}
 
     // Preload the AI dashboard quietly so opening it feels immediate.
     if(CURRENT.role==="admin" || CURRENT.role==="manager"){
-      backendPost("dashboard",{empNo},12000)
+      backendRead("dashboard",{empNo},15000)
         .then(d=>{BACKEND_DASHBOARD=d; if(ROUTE==="aiDash"&&document.getElementById("aiDashBody")) renderAIDashboardData(d,BACKEND_DATA);})
         .catch(()=>{});
     }
@@ -2275,13 +2297,17 @@ async function loadAIDashboard(){
   try{
     // Portal data is normally already loaded at login. Only request it if missing.
     const jobs=[];
-    if(!BACKEND_DATA) jobs.push(backendPost('portalData',{empNo},12000).then(x=>BACKEND_DATA=x));
-    if(!BACKEND_DASHBOARD) jobs.push(backendPost('dashboard',{empNo},12000).then(x=>BACKEND_DASHBOARD=x));
+    if(!BACKEND_DATA) jobs.push(backendRead('portalData',{empNo},15000).then(x=>BACKEND_DATA=x));
+    if(!BACKEND_DASHBOARD) jobs.push(backendRead('dashboard',{empNo},15000).then(x=>BACKEND_DASHBOARD=x));
     if(jobs.length) await Promise.all(jobs);
     renderAIDashboardData(BACKEND_DASHBOARD||{},BACKEND_DATA||{});
   }catch(e){
     if(!(BACKEND_DASHBOARD||BACKEND_DATA)){
-      box.innerHTML=`<div style="padding:24px;color:var(--red)">${ar?'تعذر تحميل لوحة التطوير. حاول مرة أخرى بعد لحظات.':'Unable to load the development dashboard. Please try again shortly.'}</div>`;
+      box.innerHTML=`<div class="card" style="padding:28px;text-align:center;border-color:rgba(224,31,38,.22)">
+        <div style="font-weight:800;color:var(--red);margin-bottom:8px">${ar?'تعذر تحميل بيانات لوحة التطوير':'Unable to load development dashboard data'}</div>
+        <div style="color:var(--muted);margin-bottom:16px">${ar?'الاتصال بالخدمة لم يكتمل. اضغط إعادة المحاولة دون تسجيل الخروج.':'The data service did not respond. Retry without signing out.'}</div>
+        <button class="btn red" onclick="BACKEND_DATA=null;BACKEND_DASHBOARD=null;loadAIDashboard()">${ar?'إعادة المحاولة':'Retry'}</button>
+      </div>`;
     }
     console.warn("AI dashboard:",e);
   }
@@ -2912,7 +2938,7 @@ async function testIntegrationStatus(){
   // Only validate Sheets when the user explicitly presses Test.
   try{
     const empNo=String(CURRENT?(CURRENT.empNo||CURRENT.id):'1001');
-    const portal=BACKEND_DATA&&BACKEND_DATA.employee ? BACKEND_DATA : await backendPost('portalData',{empNo},12000);
+    const portal=BACKEND_DATA&&BACKEND_DATA.employee ? BACKEND_DATA : await backendRead('portalData',{empNo},15000);
     if(portal&&portal.employee) BACKEND_DATA=portal;
     setIntegrationStatus('stSheets',!!(portal&&portal.employee),portal&&portal.employee?(ar?'متصل':'Connected'):(ar?'غير متصل':'Disconnected'));
   }catch(e){
@@ -3420,13 +3446,24 @@ function renderCourseDeliveryInfo(cid,enrolled){
   }
   return `<div class="card"><h3>${LANG==='ar'?'طريقة تقديم الدورة':'Course delivery'}</h3><div style="margin:12px 0"><span class="tag ${deliveryTagClass(m.type)}">${deliveryLabel(m.type)}</span></div><div style="font-size:13px;line-height:2;color:var(--ink-2)">${details}</div>${join}</div>`;
 }
+function videoProgressRec(uid,cid){
+  const r=ensureEnroll(uid,cid); if(!r.videos) r.videos={}; return r.videos;
+}
+function watchCourseVideo(cid,idx,url){
+  const u=safeExternalUrl(url); if(!u) return;
+  if(CURRENT&&CURRENT.id){ const vp=videoProgressRec(CURRENT.id,cid); vp[idx]=true; saveStore(); }
+  window.open(u,'_blank','noopener,noreferrer');
+  setTimeout(()=>{ if(ROUTE==='course'&&ROUTE_ARG===cid) render(); },150);
+}
 function renderCourseVideos(cid,enrolled){
   const m=courseTrainingMeta(cid), vids=(courseContent(cid).videos||[]);
   if(!['video','hybrid'].includes(m.type)) return '';
   if(!vids.length) return `<div class="card"><h3>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'}</h3><div style="color:var(--muted);font-size:13px;margin-top:10px">${LANG==='ar'?'لم تتم إضافة فيديوهات بعد.':'No videos added yet.'}</div></div>`;
-  return `<div class="card"><h3>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'} (${vids.length})</h3><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${vids.map((v,i)=>{
-    const canOpen=enrolled && safeExternalUrl(v.url);
-    return `<div class="lesson-item" ${canOpen?`onclick='openExternalLearning(${JSON.stringify(v.url)})'`:''} style="${canOpen?'':'cursor:default'}"><div class="li-ic">▶</div><div class="li-tx"><b>${i+1}. ${v.title||((LANG==='ar'?'فيديو':'Video')+' '+(i+1))}</b><span>${v.duration?`${v.duration} ${LANG==='ar'?'دقيقة':'min'}`:''}</span></div><span class="tag ${canOpen?'t-red':'t-gray'}">${canOpen?(LANG==='ar'?'مشاهدة':'Watch'):(LANG==='ar'?'بعد اعتماد التسجيل':'After approval')}</span></div>`;
+  const vp=(enrolled&&CURRENT&&enrollRec(CURRENT.id,cid)?.videos)||{};
+  const done=Object.keys(vp).filter(k=>vp[k]&&+k<vids.length).length, pct=Math.round(done/vids.length*100);
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'} (${vids.length})</h3>${enrolled?`<span class="tag t-green">${done}/${vids.length} · ${pct}%</span>`:''}</div>${enrolled?`<div class="progress" style="margin:10px 0 12px"><i style="width:${pct}%"></i></div>`:''}<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${vids.map((v,i)=>{
+    const canOpen=enrolled && safeExternalUrl(v.url), watched=!!vp[i];
+    return `<div class="lesson-item" ${canOpen?`onclick='watchCourseVideo(${JSON.stringify(cid)},${i},${JSON.stringify(v.url)})'`:''} style="${canOpen?'':'cursor:default'}"><div class="li-ic ${watched?'done':''}">${watched?'✓':'▶'}</div><div class="li-tx"><b>${i+1}. ${v.title||((LANG==='ar'?'فيديو':'Video')+' '+(i+1))}</b><span>${v.duration?`${v.duration} ${LANG==='ar'?'دقيقة':'min'}`:''}</span></div><span class="tag ${watched?'t-green':canOpen?'t-red':'t-gray'}">${watched?(LANG==='ar'?'تمت المشاهدة':'Watched'):canOpen?(LANG==='ar'?'مشاهدة':'Watch'):(LANG==='ar'?'بعد اعتماد التسجيل':'After approval')}</span></div>`;
   }).join('')}</div></div>`;
 }
 function courseDeliveryAdminBox(cid){
@@ -3444,7 +3481,7 @@ function courseDeliveryAdminBox(cid){
   </div>
   <div style="border:1px dashed var(--line);border-radius:12px;padding:14px;margin-top:12px">
     <div class="kv"><label>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'} (${vids.length})</label></div>
-    ${vids.map((v,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px"><b style="flex:1">${i+1}. ${v.title}</b><span class="tag t-gray">${v.duration||0} ${LANG==='ar'?'دقيقة':'min'}</span><button class="btn ghost sm" onclick="removeCourseVideo('${cid}',${i})">✕</button></div>`).join('')}
+    ${vids.map((v,i)=>`<div style="display:flex;align-items:center;gap:6px;padding:8px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px"><b style="flex:1">${i+1}. ${v.title}</b><span class="tag t-gray">${v.duration||0} ${LANG==='ar'?'دقيقة':'min'}</span><button class="btn ghost sm" ${i===0?'disabled':''} onclick="moveCourseVideo('${cid}',${i},-1)" title="${LANG==='ar'?'تحريك لأعلى':'Move up'}">↑</button><button class="btn ghost sm" ${i===vids.length-1?'disabled':''} onclick="moveCourseVideo('${cid}',${i},1)" title="${LANG==='ar'?'تحريك لأسفل':'Move down'}">↓</button><button class="btn ghost sm" onclick="removeCourseVideo('${cid}',${i})" title="${LANG==='ar'?'حذف':'Delete'}">✕</button></div>`).join('')}
     <div class="row2"><div class="kv"><label>${LANG==='ar'?'عنوان الفيديو':'Video title'}</label><input id="cvTitle" class="fin"></div><div class="kv"><label>${LANG==='ar'?'المدة بالدقائق':'Duration (minutes)'}</label><input id="cvDuration" class="fin" type="number" min="1" value="5"></div></div>
     <div class="kv"><label>${LANG==='ar'?'رابط الفيديو':'Video link'}</label><input id="cvUrl" class="fin" placeholder="https://..."></div>
     <button class="btn red sm" onclick="addCourseVideo('${cid}')">＋ ${LANG==='ar'?'إضافة فيديو':'Add video'}</button>
@@ -3466,6 +3503,13 @@ function addCourseVideo(cid){
 function removeCourseVideo(cid,idx){
   if(!trainerCanEditCourse(cid)) return;
   if(STORE.content[cid]&&STORE.content[cid].videos){STORE.content[cid].videos.splice(idx,1);saveStore();manageCourse(cid);}
+}
+function moveCourseVideo(cid,idx,dir){
+  if(!trainerCanEditCourse(cid)) return;
+  const a=STORE.content[cid]&&STORE.content[cid].videos; if(!a) return;
+  const j=idx+dir; if(j<0||j>=a.length) return;
+  [a[idx],a[j]]=[a[j],a[idx]]; saveStore(); manageCourse(cid);
+  toast(LANG==='ar'?'تم تحديث ترتيب الفيديوهات':'Video order updated');
 }
 
 /* enrollment record for current user + course */
