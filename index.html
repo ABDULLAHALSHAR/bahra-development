@@ -1305,7 +1305,7 @@ html[dir="rtl"] .login-card{
 
 
 <script id="bahra-backend-config">
-const BACKEND_URL = "https://script.google.com/macros/s/AKfycby1scyg9y_a8uvXKrPpmGs5cLFB7fUdYR848cD-rnQxKAbKudxjQFAs58hX5UxTmYV_/exec";
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbxTbIWchcZMhKgOhTFZZas3C2u6U-cx5xjNKojKLnzH9ISoI8-rglZDMb3LCUAJkCn6/exec";
 async function bahraApi(action, payload={}, method="POST") {
   if (method === "GET") {
     const qs = new URLSearchParams({action, ...payload}).toString();
@@ -1543,7 +1543,7 @@ async function testBahraBackend() {
      مساعد «اسألني» عبر Groq وقراءة البيانات من Google Sheets.
    - اتركه فارغاً "" لتشغيل المنصة بالكامل بدون إنترنت (الوضع المحلي).
    ============================================================ */
-const CONFIG = { API_URL: "https://script.google.com/macros/s/AKfycby1scyg9y_a8uvXKrPpmGs5cLFB7fUdYR848cD-rnQxKAbKudxjQFAs58hX5UxTmYV_/exec", GROQ_MODEL: "openai/gpt-oss-120b" };
+const CONFIG = { API_URL: "https://script.google.com/macros/s/AKfycbxTbIWchcZMhKgOhTFZZas3C2u6U-cx5xjNKojKLnzH9ISoI8-rglZDMb3LCUAJkCn6/exec", GROQ_MODEL: "openai/gpt-oss-120b" };
 let BACKEND_DATA=null, BACKEND_DASHBOARD=null;
 function backendReady(){ return CONFIG.API_URL && !CONFIG.API_URL.includes("PASTE_GOOGLE_APPS_SCRIPT"); }
 async function backendGet(action,payload={},timeoutMs=15000){
