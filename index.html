@@ -3345,12 +3345,13 @@ Object.assign(COURSE_CONTENT, {
    approvals, content management.  Persists to localStorage.
    ============================================================ */
 const STORE_KEY = "bahra_lms_v1";
-let STORE = { enroll:{}, requests:null, content:{}, courses:[], seq:1 };
+let STORE = { enroll:{}, requests:null, content:{}, courses:[], courseMeta:{}, seq:1 };
 function loadStore(){
   try{ const s=localStorage.getItem(STORE_KEY); if(s) STORE=JSON.parse(s); }catch(e){}
   if(!STORE.enroll) STORE.enroll={};
   if(!STORE.content) STORE.content={};
   if(!STORE.courses) STORE.courses=[];
+  if(!STORE.courseMeta) STORE.courseMeta={};
   STORE.courses.forEach(c=>{ if(!courseById(c.id)) COURSES.push(c); });
   if(!STORE.seq) STORE.seq=1;
 }
@@ -3364,8 +3365,107 @@ function reqList(){ if(!STORE.requests){ STORE.requests = REQUESTS.map(r=>({...r
 function courseContent(cid){
   const base = COURSE_CONTENT[cid] || {lessons:[],exam:[]};
   const ov = STORE.content[cid];
-  if(!ov) return base;
-  return { lessons:[...base.lessons, ...(ov.lessons||[])], exam:[...base.exam, ...(ov.exam||[])] };
+  if(!ov) return {lessons:[...(base.lessons||[])],exam:[...(base.exam||[])],videos:[]};
+  return { lessons:[...(base.lessons||[]), ...(ov.lessons||[])], exam:[...(base.exam||[]), ...(ov.exam||[])], videos:[...(ov.videos||[])] };
+}
+
+/* ---------- COURSE DELIVERY / ONLINE LEARNING ---------- */
+const COURSE_DELIVERY_DEFAULTS={
+  c_cable:{type:'inperson'}, c_safety:{type:'inperson'}, c_pm:{type:'hybrid'},
+  c_ai_work:{type:'video'}, c_energy:{type:'self'}, c_safety_adv:{type:'inperson'},
+  c_pm_basics:{type:'live',platform:'Teams'}, c_change:{type:'live',platform:'Teams'},
+  c_ai_hr:{type:'video'}, c_lead:{type:'hybrid',platform:'Teams'}, c_quality:{type:'self'}, c_cyber:{type:'video'}
+};
+function courseTrainingMeta(cid){
+  const c=courseById(cid)||{};
+  const base=COURSE_DELIVERY_DEFAULTS[cid]||{};
+  const dyn=(STORE.courses||[]).find(x=>String(x.id)===String(cid))||{};
+  const saved=(STORE.courseMeta&&STORE.courseMeta[cid])||{};
+  return {
+    type:saved.type||dyn.deliveryType||c.deliveryType||base.type||'self',
+    platform:saved.platform||dyn.meetingPlatform||c.meetingPlatform||base.platform||'',
+    meetingUrl:saved.meetingUrl||dyn.meetingUrl||c.meetingUrl||'',
+    sessionDate:saved.sessionDate||dyn.sessionDate||c.sessionDate||'',
+    sessionTime:saved.sessionTime||dyn.sessionTime||c.sessionTime||'',
+    venue:saved.venue||dyn.venue||c.venue||'',
+    attendanceRequired:saved.attendanceRequired!=null?saved.attendanceRequired:(dyn.attendanceRequired!=null?dyn.attendanceRequired:true)
+  };
+}
+function deliveryLabel(type){
+  const ar={inperson:'حضوري',live:'أونلاين مباشر',video:'فيديوهات قصيرة',self:'تعلم ذاتي',hybrid:'هجين'};
+  const en={inperson:'In-person',live:'Live online',video:'Short videos',self:'Self-paced',hybrid:'Hybrid'};
+  return (LANG==='ar'?ar:en)[type]||type;
+}
+function deliveryTagClass(type){ return ({inperson:'t-gray',live:'t-blue',video:'t-red',self:'t-green',hybrid:'t-gold'})[type]||'t-gray'; }
+function safeExternalUrl(v){ const x=String(v||'').trim(); return /^https:\/\//i.test(x)?x:''; }
+function openExternalLearning(url){
+  const u=safeExternalUrl(url);
+  if(!u){toast(LANG==='ar'?'الرابط غير متوفر أو غير صالح':'Link is unavailable or invalid');return;}
+  window.open(u,'_blank','noopener,noreferrer');
+}
+function renderCourseDeliveryInfo(cid,enrolled){
+  const m=courseTrainingMeta(cid);
+  const live=['live','hybrid'].includes(m.type);
+  const inperson=['inperson','hybrid'].includes(m.type);
+  let details='';
+  if(m.platform) details+=`<div>${LANG==='ar'?'المنصة':'Platform'}: <b>${m.platform}</b></div>`;
+  if(m.sessionDate) details+=`<div>${LANG==='ar'?'التاريخ':'Date'}: <b>${m.sessionDate}</b></div>`;
+  if(m.sessionTime) details+=`<div>${LANG==='ar'?'الوقت':'Time'}: <b>${m.sessionTime}</b></div>`;
+  if(inperson && m.venue) details+=`<div>${LANG==='ar'?'الموقع':'Venue'}: <b>${m.venue}</b></div>`;
+  let join='';
+  if(live){
+    if(!enrolled) join=`<div class="tag t-gray" style="margin-top:10px">${LANG==='ar'?'رابط الجلسة يظهر بعد اعتماد التسجيل':'Session link appears after enrollment approval'}</div>`;
+    else if(m.meetingUrl) join=`<button class="btn red" style="width:100%;margin-top:10px" onclick="openExternalLearning(${JSON.stringify(m.meetingUrl)})">${LANG==='ar'?'انضم للجلسة المباشرة':'Join live session'} ↗</button>`;
+    else join=`<div class="tag t-warn" style="margin-top:10px">${LANG==='ar'?'سيتم إضافة رابط الجلسة قريباً':'Session link will be added soon'}</div>`;
+  }
+  return `<div class="card"><h3>${LANG==='ar'?'طريقة تقديم الدورة':'Course delivery'}</h3><div style="margin:12px 0"><span class="tag ${deliveryTagClass(m.type)}">${deliveryLabel(m.type)}</span></div><div style="font-size:13px;line-height:2;color:var(--ink-2)">${details}</div>${join}</div>`;
+}
+function renderCourseVideos(cid,enrolled){
+  const m=courseTrainingMeta(cid), vids=(courseContent(cid).videos||[]);
+  if(!['video','hybrid'].includes(m.type)) return '';
+  if(!vids.length) return `<div class="card"><h3>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'}</h3><div style="color:var(--muted);font-size:13px;margin-top:10px">${LANG==='ar'?'لم تتم إضافة فيديوهات بعد.':'No videos added yet.'}</div></div>`;
+  return `<div class="card"><h3>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'} (${vids.length})</h3><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${vids.map((v,i)=>{
+    const canOpen=enrolled && safeExternalUrl(v.url);
+    return `<div class="lesson-item" ${canOpen?`onclick='openExternalLearning(${JSON.stringify(v.url)})'`:''} style="${canOpen?'':'cursor:default'}"><div class="li-ic">▶</div><div class="li-tx"><b>${i+1}. ${v.title||((LANG==='ar'?'فيديو':'Video')+' '+(i+1))}</b><span>${v.duration?`${v.duration} ${LANG==='ar'?'دقيقة':'min'}`:''}</span></div><span class="tag ${canOpen?'t-red':'t-gray'}">${canOpen?(LANG==='ar'?'مشاهدة':'Watch'):(LANG==='ar'?'بعد اعتماد التسجيل':'After approval')}</span></div>`;
+  }).join('')}</div></div>`;
+}
+function courseDeliveryAdminBox(cid){
+  const m=courseTrainingMeta(cid), vids=(courseContent(cid).videos||[]);
+  return `<div style="border:1px dashed var(--line);border-radius:12px;padding:14px;margin-top:16px">
+    <div class="kv"><label>${LANG==='ar'?'نوع تقديم الدورة':'Delivery type'}</label><select id="cdType" class="fin">
+      ${[['inperson','حضوري','In-person'],['live','أونلاين مباشر','Live online'],['video','فيديوهات قصيرة','Short videos'],['self','تعلم ذاتي','Self-paced'],['hybrid','هجين','Hybrid']].map(x=>`<option value="${x[0]}" ${m.type===x[0]?'selected':''}>${LANG==='ar'?x[1]:x[2]}</option>`).join('')}
+    </select></div>
+    <div class="row2"><div class="kv"><label>${LANG==='ar'?'منصة الاجتماع':'Meeting platform'}</label><select id="cdPlatform" class="fin"><option value="">—</option><option ${m.platform==='Teams'?'selected':''}>Teams</option><option ${m.platform==='Zoom'?'selected':''}>Zoom</option><option ${m.platform==='Other'?'selected':''} value="Other">Other</option></select></div>
+    <div class="kv"><label>${LANG==='ar'?'رابط الجلسة المباشرة':'Live session link'}</label><input id="cdUrl" class="fin" value="${String(m.meetingUrl||'').replace(/"/g,'&quot;')}" placeholder="https://..."></div></div>
+    <div class="row2"><div class="kv"><label>${LANG==='ar'?'تاريخ الجلسة':'Session date'}</label><input id="cdDate" type="date" class="fin" value="${m.sessionDate||''}"></div><div class="kv"><label>${LANG==='ar'?'وقت الجلسة':'Session time'}</label><input id="cdTime" type="time" class="fin" value="${m.sessionTime||''}"></div></div>
+    <div class="kv"><label>${LANG==='ar'?'الموقع / القاعة (للحضوري أو الهجين)':'Venue / room (in-person or hybrid)'}</label><input id="cdVenue" class="fin" value="${String(m.venue||'').replace(/"/g,'&quot;')}"></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0 12px"><input id="cdAttendance" type="checkbox" ${m.attendanceRequired?'checked':''}> ${LANG==='ar'?'الحضور إلزامي':'Attendance required'}</label>
+    <button class="btn red sm" onclick="saveCourseDelivery('${cid}')">${LANG==='ar'?'حفظ إعدادات التقديم':'Save delivery settings'}</button>
+  </div>
+  <div style="border:1px dashed var(--line);border-radius:12px;padding:14px;margin-top:12px">
+    <div class="kv"><label>${LANG==='ar'?'الفيديوهات القصيرة':'Short videos'} (${vids.length})</label></div>
+    ${vids.map((v,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px"><b style="flex:1">${i+1}. ${v.title}</b><span class="tag t-gray">${v.duration||0} ${LANG==='ar'?'دقيقة':'min'}</span><button class="btn ghost sm" onclick="removeCourseVideo('${cid}',${i})">✕</button></div>`).join('')}
+    <div class="row2"><div class="kv"><label>${LANG==='ar'?'عنوان الفيديو':'Video title'}</label><input id="cvTitle" class="fin"></div><div class="kv"><label>${LANG==='ar'?'المدة بالدقائق':'Duration (minutes)'}</label><input id="cvDuration" class="fin" type="number" min="1" value="5"></div></div>
+    <div class="kv"><label>${LANG==='ar'?'رابط الفيديو':'Video link'}</label><input id="cvUrl" class="fin" placeholder="https://..."></div>
+    <button class="btn red sm" onclick="addCourseVideo('${cid}')">＋ ${LANG==='ar'?'إضافة فيديو':'Add video'}</button>
+  </div>`;
+}
+function saveCourseDelivery(cid){
+  if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا توجد لديك صلاحية تعديل هذه الدورة':'No permission to edit this course');return;}
+  STORE.courseMeta=STORE.courseMeta||{};
+  STORE.courseMeta[cid]={type:document.getElementById('cdType')?.value||'self',platform:document.getElementById('cdPlatform')?.value||'',meetingUrl:document.getElementById('cdUrl')?.value.trim()||'',sessionDate:document.getElementById('cdDate')?.value||'',sessionTime:document.getElementById('cdTime')?.value||'',venue:document.getElementById('cdVenue')?.value.trim()||'',attendanceRequired:!!document.getElementById('cdAttendance')?.checked};
+  saveStore(); manageCourse(cid); toast(LANG==='ar'?'تم حفظ إعدادات تقديم الدورة':'Delivery settings saved');
+}
+function addCourseVideo(cid){
+  if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا توجد لديك صلاحية تعديل هذه الدورة':'No permission to edit this course');return;}
+  const title=document.getElementById('cvTitle')?.value.trim()||'', url=document.getElementById('cvUrl')?.value.trim()||'', duration=Math.max(1,+document.getElementById('cvDuration')?.value||5);
+  if(!title||!safeExternalUrl(url)){toast(LANG==='ar'?'أدخل عنوان الفيديو ورابط HTTPS صحيح':'Enter a title and a valid HTTPS video link');return;}
+  STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[],videos:[]}; if(!STORE.content[cid].videos) STORE.content[cid].videos=[];
+  STORE.content[cid].videos.push({title,url,duration}); saveStore(); manageCourse(cid); toast(LANG==='ar'?'تمت إضافة الفيديو':'Video added');
+}
+function removeCourseVideo(cid,idx){
+  if(!trainerCanEditCourse(cid)) return;
+  if(STORE.content[cid]&&STORE.content[cid].videos){STORE.content[cid].videos.splice(idx,1);saveStore();manageCourse(cid);}
 }
 
 /* enrollment record for current user + course */
@@ -3456,7 +3556,7 @@ function viewCoursePage(cid){
    <div class="course-hero"><img src="${courseCoverSrc(c.id)}" alt="">
      <div class="ch-ov"><span class="lvl ${lvlClass(c)}" style="position:static;display:inline-block;margin-bottom:8px">${lvlLabel(c)}</span>
        <h1>${cName(c)}</h1><p>${c.desc}</p>
-       <div class="ch-meta"><span> ${c.hours} ${t('hours')}</span><span> ${cont.lessons.length} ${t('lessons')}</span><span> ${cont.exam.length} ${LANG==='ar'?'سؤال':'questions'}</span></div>
+       <div class="ch-meta"><span> ${c.hours} ${t('hours')}</span><span> ${cont.lessons.length} ${t('lessons')}</span><span> ${cont.exam.length} ${LANG==='ar'?'سؤال':'questions'}</span><span class="tag ${deliveryTagClass(courseTrainingMeta(cid).type)}">${deliveryLabel(courseTrainingMeta(cid).type)}</span></div>
      </div></div>
    <div class="course-body">
      <div class="cb-main">
@@ -3474,6 +3574,8 @@ function viewCoursePage(cid){
            <div>${LANG==='ar'?'الدروس المكتملة':'Lessons done'}: <b style="color:var(--ink)">${enrolled?Object.keys(rec.lessons||{}).length:0}/${cont.lessons.length}</b></div>
          </div>
        </div>
+       ${renderCourseDeliveryInfo(cid,enrolled)}
+       ${renderCourseVideos(cid,enrolled)}
        <div class="card"><h3>${LANG==='ar'?'ماذا ستتعلم':'What you will learn'}</h3>
          <ul style="margin:10px 18px 0;font-size:13px;line-height:2;color:var(--ink-2)">
            ${cont.lessons.slice(0,5).map(l=>`<li>${l.t}</li>`).join("")}</ul></div>
@@ -3822,14 +3924,15 @@ function viewContent(){
     ? (LANG==='ar'?'يمكنك إدارة الدورات المسندة لك فقط، أو الدورات التي أنشأتها بعد اعتماد الموارد البشرية':'You can manage only courses assigned to you, or courses you created after HR approval')
     : (LANG==='ar'?'أضف دورات ودروساً وأسئلة اختبار واعتمد دورات المدربين':'Add courses, lessons and exam questions, and approve trainer courses');
   return pageHead(LANG==='ar'?'إدارة محتوى الدورات':'Course Content Management',sub,actions)+
-   `<div class="card"><table><thead><tr><th>${LANG==='ar'?'الدورة':'Course'}</th><th>${LANG==='ar'?'المستوى':'Level'}</th>
+   `<div class="card"><table><thead><tr><th>${LANG==='ar'?'الدورة':'Course'}</th><th>${LANG==='ar'?'المستوى':'Level'}</th><th>${LANG==='ar'?'طريقة التقديم':'Delivery'}</th>
      <th>${LANG==='ar'?'الدروس':'Lessons'}</th><th>${LANG==='ar'?'أسئلة الاختبار':'Exam Qs'}</th><th>${LANG==='ar'?'مسجّلون':'Enrolled'}</th><th>${LANG==='ar'?'الحالة':'Status'}</th><th></th></tr></thead>
      <tbody>${visible.map(c=>{const cont=courseContent(c.id);
        const enr=Object.values(STORE.enroll).filter(u=>u[c.id]).length;
        const editable=trainerCanEditCourse(c.id); const rec=dynamicCourseRecord(c.id);
        let btn=editable?`<button class="btn ghost sm" onclick="manageCourse('${c.id}')">${LANG==='ar'?'إدارة':'Manage'}</button>`:`<span class="tag t-gray">${LANG==='ar'?'عرض فقط':'View only'}</span>`;
        if(CURRENT.role==='admin' && rec && rec.createdBy && String(rec.approvalStatus||'pending').toLowerCase()==='pending') btn=`<div style="display:flex;gap:6px"><button class="btn red sm" onclick="approveTrainerCourse('${c.id}','approved')">${LANG==='ar'?'اعتماد':'Approve'}</button><button class="btn ghost sm" onclick="approveTrainerCourse('${c.id}','rejected')">${LANG==='ar'?'رفض':'Reject'}</button></div>`;
-       return `<tr><td><b>${cName(c)}</b>${rec&&rec.createdBy?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${LANG==='ar'?'أنشأها المدرب':'Created by trainer'} #${rec.createdBy}</div>`:''}</td><td>${lvlLabel(c)}</td><td>${cont.lessons.length}</td><td>${cont.exam.length}</td><td>${enr}</td><td>${courseApprovalBadge(c)}</td><td>${btn}</td></tr>`;}).join("") || `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted)">${LANG==='ar'?'لا توجد دورات متاحة لك حالياً':'No courses available to you currently'}</td></tr>`}
+       const dm=courseTrainingMeta(c.id);
+       return `<tr><td><b>${cName(c)}</b>${rec&&rec.createdBy?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${LANG==='ar'?'أنشأها المدرب':'Created by trainer'} #${rec.createdBy}</div>`:''}</td><td>${lvlLabel(c)}</td><td><span class="tag ${deliveryTagClass(dm.type)}">${deliveryLabel(dm.type)}</span></td><td>${cont.lessons.length}</td><td>${cont.exam.length}</td><td>${enr}</td><td>${courseApprovalBadge(c)}</td><td>${btn}</td></tr>`;}).join("") || `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--muted)">${LANG==='ar'?'لا توجد دورات متاحة لك حالياً':'No courses available to you currently'}</td></tr>`}
      </tbody></table></div>`;
 }
 function manageCourse(cid){
@@ -3851,13 +3954,14 @@ function manageCourse(cid){
          <div class="kv"><label>${LANG==='ar'?'خيار خاطئ':'Wrong option'}</label><input id="nqB" class="fin"></div></div>
        <button class="btn red sm" onclick="addQ('${cid}')">＋ ${LANG==='ar'?'إضافة سؤال':'Add question'}</button>
      </div>
+     ${courseDeliveryAdminBox(cid)}
    </div>`);
 }
 function addLesson(cid){
   if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا توجد لديك صلاحية تعديل هذه الدورة':'No permission to edit this course');return;}
   const t=document.getElementById("nlT").value.trim(), b=document.getElementById("nlB").value.trim();
   if(!t){ toast(LANG==='ar'?'أدخل عنوان الدرس':'Enter title'); return; }
-  STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[]};
+  STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[],videos:[]};
   STORE.content[cid].lessons.push({t, body:b||t, points:[]}); saveStore();
   manageCourse(cid); toast(LANG==='ar'?'تمت إضافة الدرس':'Lesson added');
 }
@@ -3865,7 +3969,7 @@ function addQ(cid){
   if(!trainerCanEditCourse(cid)){toast(LANG==='ar'?'لا توجد لديك صلاحية تعديل هذه الدورة':'No permission to edit this course');return;}
   const q=document.getElementById("nqQ").value.trim(), a=document.getElementById("nqA").value.trim(), b=document.getElementById("nqB").value.trim();
   if(!q||!a||!b){ toast(LANG==='ar'?'أكمل الحقول':'Complete fields'); return; }
-  STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[]};
+  STORE.content[cid]=STORE.content[cid]||{lessons:[],exam:[],videos:[]};
   STORE.content[cid].exam.push({q, opts:[a,b], a:0}); saveStore();
   manageCourse(cid); toast(LANG==='ar'?'تمت إضافة السؤال':'Question added');
 }
@@ -3879,19 +3983,24 @@ function newCourse(){
        <select id="ncL" class="fin"><option value="req">${t('lvl_req')}</option><option value="basic">${t('lvl_basic')}</option><option value="mid" selected>${t('lvl_mid')}</option><option value="adv">${t('lvl_adv')}</option></select></div>
        <div class="kv"><label>${LANG==='ar'?'عدد الساعات':'Hours'}</label><input id="ncH" class="fin" type="number" value="6"></div></div>
      <div class="kv"><label>${LANG==='ar'?'وصف مختصر':'Description'}</label><textarea id="ncD" class="fin" rows="2"></textarea></div>
+     <div class="kv"><label>${LANG==='ar'?'نوع تقديم الدورة':'Delivery type'}</label><select id="ncType" class="fin"><option value="inperson">${LANG==='ar'?'حضوري':'In-person'}</option><option value="live">${LANG==='ar'?'أونلاين مباشر':'Live online'}</option><option value="video">${LANG==='ar'?'فيديوهات قصيرة':'Short videos'}</option><option value="self" selected>${LANG==='ar'?'تعلم ذاتي':'Self-paced'}</option><option value="hybrid">${LANG==='ar'?'هجين':'Hybrid'}</option></select></div>
+     <div class="row2"><div class="kv"><label>${LANG==='ar'?'المنصة':'Platform'}</label><select id="ncPlatform" class="fin"><option value="">—</option><option>Teams</option><option>Zoom</option><option value="Other">Other</option></select></div><div class="kv"><label>${LANG==='ar'?'رابط الجلسة (اختياري)':'Session link (optional)'}</label><input id="ncUrl" class="fin" placeholder="https://..."></div></div>
      <button class="btn red" style="width:100%" onclick="saveCourse()">${CURRENT.role==='trainer'?(LANG==='ar'?'إرسال للاعتماد':'Submit for approval'):(LANG==='ar'?'إنشاء الدورة':'Create course')}</button>
    </div>`);
 }
 function saveCourse(){
   const n=document.getElementById("ncN").value.trim(); if(!n){toast(LANG==='ar'?'أدخل الاسم':'Enter name');return;}
   const lvl=document.getElementById("ncL").value, h=+document.getElementById("ncH").value||6, d=document.getElementById("ncD").value.trim();
+  const deliveryType=document.getElementById("ncType")?.value||'self', meetingPlatform=document.getElementById("ncPlatform")?.value||'', meetingUrl=document.getElementById("ncUrl")?.value.trim()||'';
+  if(meetingUrl && !safeExternalUrl(meetingUrl)){toast(LANG==='ar'?'رابط الجلسة يجب أن يبدأ بـ https://':'Session link must start with https://');return;}
   const id="c_new"+(STORE.seq++);
   const lvlMap={req:"إلزامي",basic:"مستوى أساسي",mid:"مستوى متوسط",adv:"مستوى متقدم"};
   const trainerCreated=CURRENT && CURRENT.role==='trainer';
   const created={id, ar:n, en:n, lvl:lvlMap[lvl], lvlk:lvl, cat:"عام", hours:h, lessons:0, cover:"pm", desc:d||n,
-    createdBy:CURRENT?CURRENT.id:null, approvalStatus:trainerCreated?'pending':'approved', createdAt:new Date().toISOString()};
+    createdBy:CURRENT?CURRENT.id:null, approvalStatus:trainerCreated?'pending':'approved', createdAt:new Date().toISOString(), deliveryType, meetingPlatform, meetingUrl};
   COURSES.push(created); STORE.courses=STORE.courses||[]; STORE.courses.push(created);
-  STORE.content[id]={lessons:[],exam:[]}; saveStore();
+  STORE.courseMeta=STORE.courseMeta||{}; STORE.courseMeta[id]={type:deliveryType,platform:meetingPlatform,meetingUrl,sessionDate:'',sessionTime:'',venue:'',attendanceRequired:true};
+  STORE.content[id]={lessons:[],exam:[],videos:[]}; saveStore();
   closeModal(); go('content');
   toast(trainerCreated?(LANG==='ar'?'تم إرسال الدورة للموارد البشرية للاعتماد':'Course submitted to HR for approval'):(LANG==='ar'?'تم إنشاء الدورة':'Course created'));
 }
