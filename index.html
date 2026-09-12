@@ -1389,7 +1389,7 @@ async function testBahraBackend() {
     <header class="topbar">
       <button class="hamb" onclick="toggleSide()">☰</button>
       <div class="search"><span class="ic">🔍</span>
-        <input placeholder="ابحث عن دورة، مهارة، أو محتوى تدريبي..." data-ph="searchPh" /></div>
+        <input id="globalSearch" type="search" placeholder="ابحث عن دورة، مهارة، أو محتوى تدريبي..." data-ph="searchPh" oninput="globalCourseSearch(this.value)" /></div>
       <div class="top-actions">
         <button class="ic-btn" onclick="toggleNotifications(event)" aria-label="Notifications"><span class="ui-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></span><span class="dot" id="notifBadge" style="display:none">0</span></button>
         <button class="ic-btn" onclick="toggleTheme()" id="themeBtn" aria-label="Theme"><span class="ui-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span></button>
@@ -2436,6 +2436,21 @@ function viewCourses(){
     </div><div class="courses-row" id="courseGrid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">${rows}</div>
     <div id="courseFilterEmpty" style="display:none;text-align:center;padding:34px 18px;color:var(--muted);font-weight:700">${LANG==='ar'?'لا توجد دورات مطابقة لخيارات البحث.':'No courses match your filters.'}</div>`;
 }
+function globalCourseSearch(value){
+  const q=String(value||'').trim();
+  // Global header search is dedicated to training courses/content.
+  if(q && ROUTE!=="courses"){
+    go("courses");
+  }
+  // Wait until the courses view has rendered, then mirror the query into its filter.
+  setTimeout(()=>{
+    const box=document.getElementById("courseSearchFilter");
+    if(!box) return;
+    box.value=q;
+    filterCourses();
+  },0);
+}
+
 function filterCourses(){
   const level=(document.getElementById('courseLevelFilter')?.value||'').trim();
   const category=(document.getElementById('courseCategoryFilter')?.value||'').trim();
