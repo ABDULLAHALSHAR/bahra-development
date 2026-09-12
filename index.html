@@ -342,7 +342,7 @@ html[dir="ltr"] #notif-panel{right:22px;left:auto}
 /* AI assistant */
 #ai-fab{position:fixed;inset-block-end:26px;inset-inline-end:26px;width:60px;height:60px;border-radius:50%;
   background:linear-gradient(140deg,var(--red),var(--red-dark));color:#fff;font-size:24px;box-shadow:0 10px 28px rgba(224,31,38,.5);
-  z-index:60;display:flex;align-items:center;justify-content:center;display:none}
+  z-index:600;display:flex;align-items:center;justify-content:center}
 #ai-panel{position:fixed;inset-block-end:98px;inset-inline-end:26px;width:min(380px,calc(100vw - 40px));height:520px;
   max-height:calc(100vh - 130px);background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow-lg);
   z-index:500;display:none;flex-direction:column;overflow:hidden}
@@ -1019,8 +1019,18 @@ html[dir="rtl"] .login-form{order:1;}
 #ai-fab:hover{transform:translateY(-3px);background:var(--red);color:#fff;box-shadow:0 14px 28px rgba(224,31,38,.25);}
 
 
-/* Final floating-control cleanup: no red circular overlay on the dashboard */
-#ai-fab{display:none!important;}
+/* Permanent AI assistant launcher — always visible in the page corner */
+#ai-fab{
+  display:none!important;
+  position:fixed!important;
+  inset-block-end:22px!important;
+  inset-inline-end:22px!important;
+  width:48px!important;
+  height:48px!important;
+  border-radius:13px!important;
+  z-index:9999!important;
+}
+body.ai-authenticated #ai-fab{display:flex!important;}
 
 
 /* ===== ADMIN EXPORT CENTER ===== */
@@ -1358,10 +1368,7 @@ async function testBahraBackend() {
         <a class="link" data-i="forgot">نسيت رمز PIN؟</a>
       </div>
       <button class="btn-primary" onclick="doLogin()"><span data-i="loginBtn">دخول إلى المنصة</span> <span>→</span></button>
-      <button class="login-ask-btn" type="button" onclick="openLoginAI()" aria-label="Ask Me assistant">
-        <span class="login-ask-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="3"/><path d="M8 11h.01M16 11h.01M9 15h6M12 3v3M9 3h6"/></svg></span>
-        <span id="loginAskText">اسألني عن المنصة</span>
-      </button>
+      
       <div class="login-help"><div class="hic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2M4 14h3v5H5a1 1 0 0 1-1-1zM20 14h-3v5h2a1 1 0 0 0 1-1z"/></svg></div>
         <span data-i="loginHelp">في حال وجود أي مشكلة في تسجيل الدخول، يرجى التواصل مع قسم الموارد البشرية.</span></div>
       <div class="hint-users" data-i="hintUsers">للتجربة — مدير: <code>1001</code> / مدرب: <code>2001</code> / موظف: <code>3001</code> — رمز PIN للجميع: <code>1234</code></div>
@@ -1411,12 +1418,12 @@ async function testBahraBackend() {
 </div>
 
 <!-- AI assistant -->
-<button id="ai-fab" onclick="toggleAI()" aria-label="AI assistant"><span class="ui-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="3"/><path d="M8 11h.01M16 11h.01M9 15h6M12 3v3M9 3h6"/></svg></span></button>
+<button id="ai-fab" onclick="toggleAI()" aria-label="اسألني — مساعد الذكاء الاصطناعي" title="اسألني — مساعد الذكاء الاصطناعي"><span class="ui-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="3"/><path d="M8 11h.01M16 11h.01M9 15h6M12 3v3M9 3h6"/></svg></span></button>
 <div id="ai-panel">
   <div class="aih"> <div><b data-i="aiTitle">مساعد «اسألني»</b><br><span data-i="aiSub">مساعد التطوير الذكي</span></div>
     <button class="x" onclick="toggleAI()">✕</button></div>
   <div id="ai-body"></div>
-  <div class="ai-note" data-i="aiNote">وضع تجريبي محلي — يتم الربط بـ Groq API عبر Code.gs عند النشر</div>
+  <div class="ai-note" id="aiConnNote">مساعد التطوير الذكي</div>
   <div id="ai-foot"><input id="aiInput" placeholder="اكتب سؤالك..." data-ph="aiPh"
     onkeydown="if(event.key==='Enter')aiSend()" /><button onclick="aiSend()">➤</button></div>
 </div>
@@ -1451,6 +1458,7 @@ async function syncBackendData(){
   try{
     BACKEND_DATA=await backendPost("portalData",{empNo:String(CURRENT.empNo||CURRENT.id)});
     try{ updateNotificationBadge(); }catch(_){}
+    if(ROUTE==="aiDash" && document.getElementById("aiDashBody")) setTimeout(()=>loadAIDashboard(),0);
     return BACKEND_DATA;
   }catch(e){
     console.warn("Backend sync:",e);
@@ -1810,7 +1818,7 @@ const I18N = {
   hintUsers:"للتجربة — مدير: <code>1001</code> / مدرب: <code>2001</code> / موظف: <code>3001</code> — رمز PIN للجميع: <code>1234</code>",
   searchPh:"ابحث عن دورة، مهارة، أو محتوى تدريبي...",sidePromo:'معاً... نصنع مستقبلاً <span class="r">أكثر إشراقاً</span>',logout:"تسجيل الخروج",
   aiTitle:"مساعد «اسألني»",aiSub:"مساعد التطوير الذكي",aiPh:"اكتب سؤالك...",
-  aiNote:"وضع تجريبي محلي — يتم الربط بـ Groq API عبر Code.gs عند النشر",
+  aiNote:"مساعد الذكاء الاصطناعي متصل عبر Code.gs",
   // nav
   n_home:"الرئيسية",n_courses:"الدورات التدريبية",n_content:"محتوى الدورات",n_sessions:"الجلسات التدريبية",
   n_requests:"طلبات التدريب",n_calendar:"التقويم",n_certs:"الشهادات",n_needs:"الاحتياج التدريبي",
@@ -1847,7 +1855,7 @@ const I18N = {
   hintUsers:"Demo — Admin: <code>1001</code> / Trainer: <code>2001</code> / Employee: <code>3001</code> — PIN for all: <code>1234</code>",
   searchPh:"Search for a course, skill, or training content...",sidePromo:'Together, a <span class="r">brighter</span> future',logout:"Sign out",
   aiTitle:"Ask-Me Assistant",aiSub:"Smart development assistant",aiPh:"Type your question...",
-  aiNote:"Local demo mode — connects to Groq API via Code.gs on deploy",
+  aiNote:"AI assistant connected through Code.gs",
   n_home:"Home",n_courses:"Training Courses",n_content:"Course Content",n_sessions:"Training Sessions",
   n_requests:"Training Requests",n_calendar:"Calendar",n_certs:"Certificates",n_needs:"Training Needs",
   n_impact:"Impact & Analytics",n_aiDash:"AI Dashboard",n_reports:"Reports",n_emps:"Employees",n_trainers:"Managers",n_settings:"Settings",
@@ -2096,9 +2104,14 @@ function doLogin(){
   }
   err.classList.add("hidden");
   CURRENT=u;
+  try{
+    localStorage.setItem("bahra_session_emp", String(u.id));
+    localStorage.setItem("bahra_session_route", "home");
+  }catch(_){}
   document.getElementById("login").style.display="none";
   document.getElementById("app").style.display="block";
-  document.getElementById("ai-fab").style.display="none";
+  document.body.classList.add("ai-authenticated");
+  
   updateProfile();
   ROUTE="home"; buildNav(); render();
   updateNotificationBadge();
@@ -2107,9 +2120,13 @@ function doLogin(){
 }
 function logout(){
   if(!confirm(LANG==="ar"?"تسجيل الخروج من المنصة؟":"Sign out?")) return;
+  document.body.classList.remove("ai-authenticated");
+  try{
+    localStorage.removeItem("bahra_session_emp");
+    localStorage.removeItem("bahra_session_route");
+  }catch(_){}
   CURRENT=null;
   document.getElementById("app").style.display="none";
-  document.getElementById("ai-fab").style.display="none";
   document.getElementById("ai-panel").style.display="none";
   document.getElementById("login").style.display="flex";
   document.getElementById("fEmp").value=""; document.getElementById("fPin").value="";
@@ -2125,7 +2142,10 @@ function buildNav(){
       ${b?`<span class="badge">${b}</span>`:''}</a>`;
   }).join("");
 }
-function go(r){ ROUTE=r; buildNav(); render(); if(window.innerWidth<=900) document.getElementById("sidebar").classList.remove("open");
+function go(r){
+  ROUTE=r;
+  try{ if(CURRENT) localStorage.setItem("bahra_session_route", String(r)); }catch(_){}
+  buildNav(); render(); if(window.innerWidth<=900) document.getElementById("sidebar").classList.remove("open");
   document.querySelector('.view').scrollTo(0,0); window.scrollTo(0,0); }
 
 /* ---------- ROUTER ---------- */
@@ -2137,15 +2157,15 @@ function render(){
    emps:viewEmps,trainers:viewTrainers,settings:viewSettings,content:viewContent}[ROUTE] || viewHome;
   v.innerHTML = fn();
   if(ROUTE==="impact") drawImpact();
-  if(ROUTE==="aiDash" && backendReady()) setTimeout(loadAIDashboard,50);
+  if(ROUTE==="aiDash" && backendReady()) setTimeout(()=>loadAIDashboard(),0);
 }
 
 
 /* ---------- AI / HR DASHBOARD (backend-powered) ---------- */
 function viewAIDashboard(){
   const ar=LANG==='ar';
-  return `<div class="page-head"><div><h1>${ar?'لوحة الذكاء الاصطناعي للتطوير':'AI Development Dashboard'}</h1><p>${ar?'تحليل فجوات المهارات والاحتياجات وخطط التطوير من قاعدة البيانات الحقيقية.':'Live skill gaps, needs and development plans from the backend.'}</p></div><button class="btn red" onclick="loadAIDashboard()">↻ ${ar?'تحديث البيانات':'Refresh'}</button></div>
-  <div id="aiDashBody" class="card"><div style="text-align:center;padding:34px;color:var(--muted)">${backendReady()?(ar?'جاري قراءة بيانات التطوير الحقيقية...':'Loading live development data...'):(ar?'اربط رابط Web App داخل CONFIG.API_URL أولاً.':'Set the Web App URL in CONFIG.API_URL first.')}</div></div>`;
+  return `<div class="page-head"><div><h1>${ar?'لوحة الذكاء الاصطناعي للتطوير':'AI Development Dashboard'}</h1><p>${ar?'تُقرأ البيانات تلقائياً من قاعدة البيانات عند فتح الصفحة.':'Data is read automatically from the backend when this page opens.'}</p></div><span class="tag t-green">● ${ar?'مزامنة تلقائية':'Auto Sync'}</span></div>
+  <div id="aiDashBody" class="card"><div style="text-align:center;padding:34px;color:var(--muted)">${backendReady()?(ar?'جاري قراءة أحدث البيانات تلقائياً...':'Loading the latest data automatically...'):(ar?'الربط غير متاح حالياً. راجع الإعدادات.':'Connection is currently unavailable. Check Settings.')}</div></div>`;
 }
 
 function priorityTagAI(p){
@@ -2894,19 +2914,81 @@ function aiContext(){
     +`الدورات المتاحة في المنصة: ${COURSES.map(c=>c.ar).join('، ')}.`;
 }
 async function aiSend(){
-  const inp=document.getElementById("aiInput"); const q=inp.value.trim(); if(!q)return;
-  aiPush(q.replace(/</g,"&lt;"),"me"); inp.value="";
-  if(CONFIG.API_URL){
-    aiPush("…","bot"); const body=document.getElementById("ai-body"); const holder=body.lastChild;
-    try{
-      const r=await fetch(CONFIG.API_URL,{method:"POST",
-        body:JSON.stringify({action:"ask", empNo:CURRENT?String(CURRENT.empNo||CURRENT.id):"", q, lang:LANG, context:aiContext()})});
-      const d=await r.json(); holder.innerHTML = d.reply || aiAnswer(q);
-    }catch(err){ holder.innerHTML = aiAnswer(q); }
-    body.scrollTop=body.scrollHeight;
-  } else {
-    setTimeout(()=>aiPush(aiAnswer(q),"bot"),300);
+  const inp=document.getElementById("aiInput");
+  const q=inp.value.trim();
+  if(!q)return;
+
+  aiPush(q.replace(/</g,"&lt;"),"me");
+  inp.value="";
+
+  if(!backendReady()){
+    aiPush(LANG==='ar'
+      ?"مساعد الذكاء الاصطناعي غير متصل حالياً بـ Code.gs. تحقق من رابط Web App في الإعدادات."
+      :"The AI assistant is not connected to Code.gs. Check the Web App URL in Settings.","bot");
+    return;
   }
+
+  aiPush("…","bot");
+  const body=document.getElementById("ai-body");
+  const holder=body.lastChild;
+
+  try{
+    const r=await fetch(CONFIG.API_URL,{
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({
+        action:"ask",
+        empNo:CURRENT?String(CURRENT.empNo||CURRENT.id):"",
+        q,
+        lang:LANG,
+        context:aiContext()
+      })
+    });
+
+    const raw=await r.text();
+    let d;
+    try{ d=JSON.parse(raw); }
+    catch(_){ throw new Error("Invalid JSON response from Code.gs"); }
+
+    if(d && d.ok===false) throw new Error(d.error||"Backend error");
+
+    const reply = d.reply || d.answer || d.message || "";
+    if(!reply) throw new Error("No AI reply returned");
+
+    holder.innerHTML=reply;
+    setAIConnectionNote(true, d.mode || "ai");
+  }catch(err){
+    console.error("AI assistant error:",err);
+    holder.innerHTML = LANG==='ar'
+      ?`تعذر الاتصال بمساعد الذكاء الاصطناعي عبر Code.gs.<br><small>${String(err.message||err)}</small>`
+      :`Unable to connect to the AI assistant through Code.gs.<br><small>${String(err.message||err)}</small>`;
+    setAIConnectionNote(false);
+  }
+
+  body.scrollTop=body.scrollHeight;
+}
+
+function setAIConnectionNote(ok,mode){
+  const el=document.getElementById("aiConnNote");
+  if(!el)return;
+
+  if(!ok){
+    el.textContent = LANG==='ar'?'المساعد غير متاح حالياً':'Assistant temporarily unavailable';
+    el.style.background='var(--red-soft)';
+    el.style.color='var(--red)';
+    return;
+  }
+
+  if(mode==="local"){
+    el.textContent = LANG==='ar'?'مساعد التطوير — يحتاج تفعيل Groq':'Development Assistant — Groq activation required';
+    el.style.background='var(--warn-soft,#fff4df)';
+    el.style.color='var(--warn,#9a6500)';
+    return;
+  }
+
+  el.textContent = LANG==='ar'?'مساعد التطوير الذكي':'AI Development Assistant';
+  el.style.background='var(--ok-soft)';
+  el.style.color='var(--ok)';
 }
 function aiAnswer(q){
   const s=q.toLowerCase(); const e=CURRENT; const ar=LANG==='ar';
@@ -2952,8 +3034,8 @@ function aiAnswer(q){
   }
   if(has("مرحبا","السلام","hello","hi","hey","اهلا")) return ar?"أهلاً بك  كيف أقدر أساعدك في تطويرك اليوم؟":"Hello  how can I help?";
   // fallback
-  return ar?`فهمت سؤالك: «${q}». في الوضع التجريبي المحلي أجاوب على: الاحتياج التدريبي، الدورات، الجلسات، الطلبات، الشهادات والأداء. عند نشر المنصة سيُربط هذا المساعد بـ <b>Groq API</b> عبر Code.gs ليجيب بحرّية على أي سؤال.`
-           :`Got it: "${q}". In local demo I answer about needs, courses, sessions, requests, certs & performance. On deploy this connects to <b>Groq API</b> via Code.gs.`;
+  return ar?`أقدر أساعدك في الاحتياج التدريبي، الدورات، الجلسات، الطلبات، الشهادات والأداء.`
+           :`I can help with training needs, courses, sessions, requests, certificates and performance.`;
 }
 
 
@@ -3653,6 +3735,33 @@ applyLangDir();
 setTimeout(()=>{const q=new URLSearchParams(location.search).get('verify');if(q)showVerification(q);},250);
 document.getElementById("fEmp").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("fPin").focus();});
 document.getElementById("fPin").addEventListener("keydown",e=>{if(e.key==="Enter")doLogin();});
+
+
+(function restoreBahraSession(){
+  try{
+    const empId=localStorage.getItem("bahra_session_emp");
+    if(!empId) return;
+    const u=empById(empId);
+    if(!u) return;
+
+    CURRENT=u;
+    const savedRoute=localStorage.getItem("bahra_session_route") || "home";
+    ROUTE=savedRoute;
+
+    document.getElementById("login").style.display="none";
+    document.getElementById("app").style.display="block";
+    document.body.classList.add("ai-authenticated");
+
+    updateProfile();
+    buildNav();
+    render();
+    updateNotificationBadge();
+    syncBackendData();
+    aiReset();
+  }catch(err){
+    console.warn("Session restore failed:",err);
+  }
+})();
 
 </script>
 
