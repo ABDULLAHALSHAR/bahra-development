@@ -2422,18 +2422,37 @@ function viewCourses(){
   const cats=["الكل",...new Set(COURSES.map(c=>c.cat))];
   const rows = COURSES.map(c=>{
     const p = e.completed.includes(c.id)?100 : (e.inprog.includes(c.id)?ri(20,70):0);
-    return courseCard(c,{progress:p});
+    const card=courseCard(c,{progress:p});
+    const searchable=[c.ar,c.en,c.cat,c.desc,c.lvl].filter(Boolean).join(" ").toLowerCase();
+    return card.replace('<div class="course"', `<div class="course" data-course-id="${c.id}" data-level="${c.lvlk}" data-category="${c.cat}" data-search="${searchable.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"`);
   }).join("");
   return pageHead(LANG==="ar"?"الدورات التدريبية":"Training Courses",
     LANG==="ar"?`${COURSES.length} دورة متاحة عبر ${cats.length-1} مجالات تدريبية`:`${COURSES.length} courses across ${cats.length-1} areas`) +
    `<div class="filters">
-      <select onchange="filterCourses(this.value)"><option value="">${LANG==='ar'?'كل المستويات':'All levels'}</option>
-        <option>${t('lvl_req')}</option><option>${t('lvl_basic')}</option><option>${t('lvl_mid')}</option><option>${t('lvl_adv')}</option></select>
-      <select><option>${LANG==='ar'?'كل المجالات':'All areas'}</option>${[...new Set(COURSES.map(c=>c.cat))].map(x=>`<option>${x}</option>`).join("")}</select>
-      <input placeholder="${LANG==='ar'?'بحث...':'Search...'}" />
-    </div><div class="courses-row" id="courseGrid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">${rows}</div>`;
+      <select id="courseLevelFilter" onchange="filterCourses()"><option value="">${LANG==='ar'?'كل المستويات':'All levels'}</option>
+        <option value="req">${t('lvl_req')}</option><option value="basic">${t('lvl_basic')}</option><option value="mid">${t('lvl_mid')}</option><option value="adv">${t('lvl_adv')}</option></select>
+      <select id="courseCategoryFilter" onchange="filterCourses()"><option value="">${LANG==='ar'?'كل المجالات':'All areas'}</option>${[...new Set(COURSES.map(c=>c.cat))].map(x=>`<option value="${x}">${x}</option>`).join("")}</select>
+      <input id="courseSearchFilter" type="search" placeholder="${LANG==='ar'?'بحث...':'Search...'}" oninput="filterCourses()" />
+    </div><div class="courses-row" id="courseGrid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">${rows}</div>
+    <div id="courseFilterEmpty" style="display:none;text-align:center;padding:34px 18px;color:var(--muted);font-weight:700">${LANG==='ar'?'لا توجد دورات مطابقة لخيارات البحث.':'No courses match your filters.'}</div>`;
 }
-function filterCourses(){ toast(LANG==='ar'?'تمت التصفية (عرض تجريبي)':'Filtered (demo)'); }
+function filterCourses(){
+  const level=(document.getElementById('courseLevelFilter')?.value||'').trim();
+  const category=(document.getElementById('courseCategoryFilter')?.value||'').trim();
+  const q=(document.getElementById('courseSearchFilter')?.value||'').trim().toLowerCase();
+  const cards=[...document.querySelectorAll('#courseGrid .course')];
+  let shown=0;
+  cards.forEach(card=>{
+    const okLevel=!level||card.dataset.level===level;
+    const okCategory=!category||card.dataset.category===category;
+    const okSearch=!q||(card.dataset.search||'').includes(q);
+    const show=okLevel&&okCategory&&okSearch;
+    card.style.display=show?'':'none';
+    if(show) shown++;
+  });
+  const empty=document.getElementById('courseFilterEmpty');
+  if(empty) empty.style.display=shown?'none':'block';
+}
 
 /* enroll / open course */
 function reqCourse(cid){ return requestCourse(cid); }
